@@ -181,26 +181,26 @@ function render() {
   ];
 
   const right = [cosYaw, 0, sinYaw];
-  const speed = 0.05;
+  const speed = 5;
 
   // Move camera
   if (keys.includes("w") || keys.includes("W")) {
-    cameraPos[0] += forward[0] * speed;
-    cameraPos[1] += forward[1] * speed;
-    cameraPos[2] += forward[2] * speed;
+    cameraPos[0] += forward[0] * speed * deltaTime;
+    cameraPos[1] += forward[1] * speed * deltaTime;
+    cameraPos[2] += forward[2] * speed * deltaTime;
   }
   if (keys.includes("s") || keys.includes("S")) {
-    cameraPos[0] -= forward[0] * speed;
-    cameraPos[1] -= forward[1] * speed;
-    cameraPos[2] -= forward[2] * speed;
+    cameraPos[0] -= forward[0] * speed * deltaTime;
+    cameraPos[1] -= forward[1] * speed * deltaTime;
+    cameraPos[2] -= forward[2] * speed * deltaTime;
   }
   if (keys.includes("a") || keys.includes("A")) {
-    cameraPos[0] -= right[0] * speed;
-    cameraPos[2] -= right[2] * speed;
+    cameraPos[0] -= right[0] * speed * deltaTime;
+    cameraPos[2] -= right[2] * speed * deltaTime;
   }
   if (keys.includes("d") || keys.includes("D")) {
-    cameraPos[0] += right[0] * speed;
-    cameraPos[2] += right[2] * speed;
+    cameraPos[0] += right[0] * speed * deltaTime;
+    cameraPos[2] += right[2] * speed * deltaTime;
   }
 
   const cameraTarget = [
