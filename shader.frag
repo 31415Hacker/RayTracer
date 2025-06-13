@@ -1,135 +1,117 @@
 #version 300 es
 precision highp float;
-out vec4 outColor;
+
+layout(location = 0) out vec4 outColor;
 in vec2 v_uv;
 
 #define SPHERE_COUNT 10
-#define SQRT_SAMPLES 2
+#define SQRT_SAMPLES 1
 
 uniform vec3 u_cameraPos;
 uniform vec3 u_cameraTarget;
 uniform vec3 u_cameraUp;
 uniform float u_fov;
 uniform float u_aspect;
-uniform vec3 u_sphereCenters[SPHERE_COUNT];
+uniform vec3  u_sphereCenters[SPHERE_COUNT];
 uniform float u_sphereRadii[SPHERE_COUNT];
-uniform vec3 u_colors[SPHERE_COUNT];
+uniform vec3  u_colors[SPHERE_COUNT];
+uniform float u_time;
+uniform sampler2D u_prevFrameTex;
+uniform int     u_frameIndex;
+uniform int     u_maxFrames;
 
-float sphereIntersect(vec3 ro, vec3 rd, vec3 center, float radius) {
-  vec3 oc = ro - center;
+float sphereIntersect(vec3 ro, vec3 rd, vec3 c, float r) {
+  vec3 oc = ro - c;
   float b = dot(oc, rd);
-  float c = dot(oc, oc) - radius * radius;
-  float h = b * b - c;
+  float h = b*b - dot(oc, oc) + r*r;
   if (h < 0.0) return -1.0;
   return -b - sqrt(h);
 }
 
 float random(vec2 seed) {
-  return fract(sin(dot(seed.xy, vec2(12.9898,78.233))) * 43758.5453123);
+  return fract(sin(dot(seed,vec2(12.9898,78.233)))*43758.5453123);
 }
 
 float computeSoftShadow(vec3 hit, vec3 normal, vec3 lightPos) {
-  vec3 lightDir   = normalize(lightPos - hit);
-  float lightDist = length(lightPos - hit);
-  vec3 o          = hit + normal * 0.001;
+  // compute basic ray & offset
+  vec3 Ldir  = normalize(lightPos - hit);
+  float Ldis = length(lightPos - hit);
+  vec3 o = hit + normal * 0.001;
 
-  // LOD as before…
-  float nearDist = 1.0, farDist = 20.0;
-  float q = clamp(1.0 - (lightDist - nearDist)/(farDist - nearDist), 0.0, 1.0);
-  int minSamples = 1, maxSamples = 10;
-  int totalSamples = int(mix(float(minSamples), float(maxSamples), q));
-  int S = max(int(floor(sqrt(float(totalSamples)))), 1);
+  // LOD parameters
+  float nearDist = 5.0, farDist = 15.0;
+  int minGrid = 1, maxGrid = 6;
+
+  float d = clamp((Ldis - nearDist)/(farDist - nearDist),0.,1.);
+  float q = pow(smoothstep(0.,1.,1.-d), 0.7);
+
+  int S = max(int(mix(float(minGrid), float(maxGrid), q)+0.5),1);
   float invS = 1.0/float(S);
 
-  // --- compute a per-pixel rotation angle ---
-  float angle = random(v_uv * 37.0) * 6.2831853; // [0,2π)
-  mat2 R = mat2(
-    cos(angle), -sin(angle),
-    sin(angle),  cos(angle)
-  );
+  // per-pixel rotation
+  float angle = random(v_uv*37.0 + u_time*13.1) * 6.2831853;
+  mat2 R = mat2(cos(angle),-sin(angle), sin(angle),cos(angle));
 
   float shadow = 0.0;
-  for (int xi = 0; xi < S; xi++) {
-    for (int yi = 0; yi < S; yi++) {
-      // stratified jitter in [−0.5,0.5]
-      vec2 jitter = (vec2(xi, yi) + random(vec2(xi, yi) + v_uv)) * invS - 0.5;
-      // rotate each sample
-      jitter = R * jitter;
-
-      vec3 offDir = normalize(lightDir + vec3(jitter * 0.05, 0.0));
-
-      bool blocked = false;
-      for (int j = 0; j < SPHERE_COUNT; j++) {
-        float t = sphereIntersect(o, offDir, u_sphereCenters[j], u_sphereRadii[j]);
-        if (t > 0.0 && t < lightDist) { blocked = true; break; }
+  for(int xi=0; xi<S; xi++){
+    for(int yi=0; yi<S; yi++){
+      vec2 jit = (vec2(xi,yi) + random(vec2(xi,yi)+v_uv))*invS - 0.5;
+      jit = R*jit;
+      vec3 Rd = normalize(Ldir + vec3(jit*0.05,0.0));
+      bool blk=false;
+      for(int j=0;j<SPHERE_COUNT;j++){
+        float t=sphereIntersect(o,Rd,u_sphereCenters[j],u_sphereRadii[j]);
+        if(t>0.0 && t< Ldis){ blk=true; break; }
       }
-      shadow += blocked ? 0.0 : 1.0;
+      shadow += blk?0.0:1.0;
     }
   }
-  return shadow / float(S * S);
+  return shadow/float(S*S);
 }
 
 vec3 raytrace(vec2 uv) {
-  vec3 forward = normalize(u_cameraTarget - u_cameraPos);
-  vec3 right = normalize(cross(forward, u_cameraUp));
-  vec3 up = cross(right, forward);
+  vec3 fwd = normalize(u_cameraTarget - u_cameraPos);
+  vec3 right=normalize(cross(fwd,u_cameraUp));
+  vec3 upv =cross(right,fwd);
 
-  uv = uv * 2.0 - 1.0;
+  uv = uv*2.0 -1.0;
   uv.x *= u_aspect;
-  float focalLength = 1.0 / tan(u_fov * 0.5);
+  float focal = 1.0/tan(u_fov*0.5);
   vec3 ro = u_cameraPos;
-  vec3 rd = normalize(forward * focalLength + right * uv.x + up * uv.y);
+  vec3 rd = normalize(fwd*focal + right*uv.x + upv*uv.y);
 
-  float closestT = 1e20;
-  int hitSphere = -1;
-
-  for (int i = 0; i < SPHERE_COUNT; i++) {
-    float t = sphereIntersect(ro, rd, u_sphereCenters[i], u_sphereRadii[i]);
-    if (t > 0.0 && t < closestT) {
-      closestT = t;
-      hitSphere = i;
-    }
+  float closest=1e20; int hit=-1;
+  for(int i=0;i<SPHERE_COUNT;i++){
+    float t=sphereIntersect(ro,rd,u_sphereCenters[i],u_sphereRadii[i]);
+    if(t>0.0 && t<closest){ closest=t; hit=i; }
   }
+  if(hit<0) return vec3(0.6,0.8,1.0);
 
-  if (hitSphere != -1) {
-    vec3 hit = ro + closestT * rd;
-    vec3 normal = normalize(hit - u_sphereCenters[hitSphere]);
+  vec3 H = ro + closest*rd;
+  vec3 N = normalize(H - u_sphereCenters[hit]);
+  vec3 Lp=vec3(5.,5.,5.), Ld=normalize(Lp-H);
+  float diff = max(dot(N,Ld),0.0);
+  if(diff<=0.) return vec3(0.);
 
-    vec3 lightPos = vec3(5.0, 5.0, 5.0);
-    vec3 lightDir = normalize(lightPos - hit);
-
-    float diffuse = max(dot(normal, lightDir), 0.0);
-
-    // EARLY OUT: if no direct light, skip shadow entirely
-    if (diffuse <= 0.0) {
-      return vec3(0.0);  // or your ambient color if you have one
-    }
-
-    float shadow = computeSoftShadow(hit, normal, lightPos);
-
-    vec3 color = u_colors[hitSphere];
-    return color * (shadow * diffuse); // No ambient — pure soft shadow * diffuse
-  }
-
-  // Background
-  return vec3(0.6, 0.8, 1.0);
+  float sh = computeSoftShadow(H,N,Lp);
+  return u_colors[hit]*(diff*sh);
 }
 
-void main() {
-  vec3 color = vec3(0.0);
-  float offset = 1.0 / 800.0;
-
-  for (int dx = 0; dx < SQRT_SAMPLES; dx++) {
-    for (int dy = 0; dy < SQRT_SAMPLES; dy++) {
-      // stratified offset in [0,1)
-      vec2 jitter = (vec2(dx, dy) + random(v_uv + vec2(dx,dy))) / float(SQRT_SAMPLES);
-      // center it around zero
-      vec2 offUV = v_uv + (jitter - 0.5) * offset;
-
-      color += raytrace(offUV);
+void main(){
+  vec3 col=vec3(0.0);
+  float offs=1.0/800.0;
+  for(int dx=0;dx<SQRT_SAMPLES;dx++){
+    for(int dy=0;dy<SQRT_SAMPLES;dy++){
+      vec2 jit=(vec2(dx,dy)+random(v_uv+vec2(dx,dy)))/float(SQRT_SAMPLES);
+      vec2 uv2=v_uv+(jit-0.5)*offs;
+      col += raytrace(uv2);
     }
   }
+  col /= float(SQRT_SAMPLES*SQRT_SAMPLES);
 
-  color /= float(SQRT_SAMPLES * SQRT_SAMPLES);
-  outColor = vec4(color, 1.0);
+  vec4 curr = vec4(col,1.0);
+  vec4 prev = texture(u_prevFrameTex, v_uv);
+  float count= float(min(u_frameIndex+1, u_maxFrames));
+  float alpha = 1.0/count;
+  outColor = mix(prev, curr, alpha);
 }
