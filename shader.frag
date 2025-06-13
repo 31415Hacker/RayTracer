@@ -1,117 +1,186 @@
 #version 300 es
 precision highp float;
 
-layout(location = 0) out vec4 outColor;
-in vec2 v_uv;
+in  vec2 v_uv;
+out vec4 outColor;
 
-#define SPHERE_COUNT 10
-#define SQRT_SAMPLES 1
+// textures & counts
+uniform sampler2D u_triTex;
+uniform sampler2D u_normTex;
+uniform sampler2D u_nodeTex;
+uniform int       u_texSize;
+uniform int       u_nodeTexSize;
+uniform int       u_triCount;
+uniform int       u_nodeCount;
 
-uniform vec3 u_cameraPos;
-uniform vec3 u_cameraTarget;
-uniform vec3 u_cameraUp;
+// camera & model
+uniform vec3  u_cameraPos;
+uniform vec3  u_cameraTarget;
+uniform vec3  u_cameraUp;
 uniform float u_fov;
 uniform float u_aspect;
-uniform vec3  u_sphereCenters[SPHERE_COUNT];
-uniform float u_sphereRadii[SPHERE_COUNT];
-uniform vec3  u_colors[SPHERE_COUNT];
-uniform float u_time;
-uniform sampler2D u_prevFrameTex;
-uniform int     u_frameIndex;
-uniform int     u_maxFrames;
+uniform mat4  u_model;
 
-float sphereIntersect(vec3 ro, vec3 rd, vec3 c, float r) {
-  vec3 oc = ro - c;
-  float b = dot(oc, rd);
-  float h = b*b - dot(oc, oc) + r*r;
-  if (h < 0.0) return -1.0;
-  return -b - sqrt(h);
+// fetch triangle vertex position
+vec3 fetchPos(int i,int v){
+  int idx = i*3+v;
+  ivec2 p = ivec2(idx%u_texSize, idx/u_texSize);
+  return texelFetch(u_triTex,p,0).xyz;
+}
+// fetch vertex normal
+vec3 fetchNor(int i,int v){
+  int idx = i*3+v;
+  ivec2 p = ivec2(idx%u_texSize, idx/u_texSize);
+  return normalize(texelFetch(u_normTex,p,0).xyz);
 }
 
-float random(vec2 seed) {
-  return fract(sin(dot(seed,vec2(12.9898,78.233)))*43758.5453123);
+// fetch BVH node (2 pixels)
+void fetchNode(int ni, out vec3 mn, out vec3 mx, out int left, out int rc){
+  int pix0 = ni*2;
+  ivec2 p0 = ivec2(pix0%u_nodeTexSize, pix0/u_nodeTexSize);
+  vec4 d0  = texelFetch(u_nodeTex,p0,0);
+  int pix1 = pix0+1;
+  ivec2 p1 = ivec2(pix1%u_nodeTexSize, pix1/u_nodeTexSize);
+  vec4 d1  = texelFetch(u_nodeTex,p1,0);
+
+  mn    = d0.rgb;
+  left  = int(d0.a + 0.5);
+  mx    = d1.rgb;
+  rc    = int(d1.a + (d1.a<0.0?-0.5:0.5));
 }
 
-float computeSoftShadow(vec3 hit, vec3 normal, vec3 lightPos) {
-  // compute basic ray & offset
-  vec3 Ldir  = normalize(lightPos - hit);
-  float Ldis = length(lightPos - hit);
-  vec3 o = hit + normal * 0.001;
+// AABB intersect → returns true + tmin,tmax
+bool intersectAABB(vec3 ro,vec3 invRd,vec3 mn,vec3 mx,
+                   out float tmin, out float tmax){
+  vec3 t0 = (mn - ro)*invRd;
+  vec3 t1 = (mx - ro)*invRd;
+  vec3 tmin3 = min(t0,t1);
+  vec3 tmax3 = max(t0,t1);
+  tmin = max(max(tmin3.x,tmin3.y),tmin3.z);
+  tmax = min(min(tmax3.x,tmax3.y),tmax3.z);
+  return tmax >= max(tmin,0.0);
+}
 
-  // LOD parameters
-  float nearDist = 5.0, farDist = 15.0;
-  int minGrid = 1, maxGrid = 6;
+// Möller–Trumbore with barycentrics
+bool triIntersect(vec3 ro,vec3 rd,vec3 v0,vec3 v1,vec3 v2,
+                  out float t,out float u,out float v){
+  const float EPS=1e-6;
+  vec3 e1=v1-v0, e2=v2-v0;
+  vec3 p=cross(rd,e2);
+  float a=dot(e1,p);
+  if(abs(a)<EPS) return false;
+  float invA=1.0/a;
+  vec3 s=ro-v0;
+  u=invA*dot(s,p);
+  if(u<0.0||u>1.0) return false;
+  vec3 q=cross(s,e1);
+  v=invA*dot(rd,q);
+  if(v<0.0||u+v>1.0) return false;
+  float tt=invA*dot(e2,q);
+  if(tt>EPS){ t=tt; return true; }
+  return false;
+}
 
-  float d = clamp((Ldis - nearDist)/(farDist - nearDist),0.,1.);
-  float q = pow(smoothstep(0.,1.,1.-d), 0.7);
+vec3 raytrace(vec2 uv){
+  // build camera ray in world
+  vec3 fwd=normalize(u_cameraTarget-u_cameraPos);
+  vec3 rt =normalize(cross(fwd,u_cameraUp));
+  vec3 up =cross(rt,fwd);
+  uv = uv*2.0 - 1.0;
+  uv.x *= u_aspect;
+  float fl = 1.0/tan(u_fov*0.5);
+  vec3 ro_w = u_cameraPos;
+  vec3 rd_w = normalize(fwd*fl + rt*uv.x + up*uv.y);
 
-  int S = max(int(mix(float(minGrid), float(maxGrid), q)+0.5),1);
-  float invS = 1.0/float(S);
+  // to object space
+  mat3 invR = transpose(mat3(u_model));
+  vec3 ro = invR * ro_w;
+  vec3 rd = normalize(invR * rd_w);
+  vec3 light = invR * vec3(5.0,5.0,5.0);
+  vec3 invRd = 1.0/rd;
 
-  // per-pixel rotation
-  float angle = random(v_uv*37.0 + u_time*13.1) * 6.2831853;
-  mat2 R = mat2(cos(angle),-sin(angle), sin(angle),cos(angle));
+  // BVH traversal stack
+  const int MAX_ST=64;
+  int stack[MAX_ST];
+  int sp=0; stack[sp++]=0; // start at root
 
-  float shadow = 0.0;
-  for(int xi=0; xi<S; xi++){
-    for(int yi=0; yi<S; yi++){
-      vec2 jit = (vec2(xi,yi) + random(vec2(xi,yi)+v_uv))*invS - 0.5;
-      jit = R*jit;
-      vec3 Rd = normalize(Ldir + vec3(jit*0.05,0.0));
-      bool blk=false;
-      for(int j=0;j<SPHERE_COUNT;j++){
-        float t=sphereIntersect(o,Rd,u_sphereCenters[j],u_sphereRadii[j]);
-        if(t>0.0 && t< Ldis){ blk=true; break; }
+  float bestT = 1e20;
+  vec3  bestN = vec3(0.0);
+
+  while(sp>0){
+    int ni = stack[--sp];
+    vec3 mn,mx; int left,rc;
+    fetchNode(ni,mn,mx,left,rc);
+
+    float tmin,tmax;
+    if(!intersectAABB(ro,invRd,mn,mx,tmin,tmax)) continue;
+
+    if (tmin > bestT) continue;
+
+    if (rc < 0) {
+        // leaf: left=triStart, rc=-count
+        int start = left;
+        int cnt   = -rc;
+        for (int j = 0; j < cnt; ++j) {
+            int ti = start + j;
+
+            // 1) PREFETCH the 3 vertex positions
+            vec3 v0 = fetchPos(ti, 0);
+            vec3 v1 = fetchPos(ti, 1);
+            vec3 v2 = fetchPos(ti, 2);
+
+            // 2) PREFETCH the 3 vertex normals
+            vec3 n0 = fetchNor(ti, 0);
+            vec3 n1 = fetchNor(ti, 1);
+            vec3 n2 = fetchNor(ti, 2);
+
+            // 3) do intersection
+            float t, u, v;
+            if (triIntersect(ro, rd, v0, v1, v2, t, u, v) && t < bestT) {
+                bestT = t;
+                // 4) smooth‐shade with the already‐fetched normals
+                bestN = normalize(n0 * (1.0 - u - v)
+                                + n1 * u
+                                + n2 * v);
+            }
+        }
+    } else {
+      // internal: left & rc are children
+      int c0=left, c1=rc;
+      // fetch their AABBs + entry ts
+      vec3 mn0,mx0,mn1,mx1; int dummy;
+      float t0min,t0max,t1min,t1max;
+      fetchNode(c0,mn0,mx0,dummy,dummy);
+      fetchNode(c1,mn1,mx1,dummy,dummy);
+      bool hit0 = intersectAABB(ro,invRd,mn0,mx0,t0min,t0max);
+      bool hit1 = intersectAABB(ro,invRd,mn1,mx1,t1min,t1max);
+
+      if(hit0 && hit1){
+        // push closest first
+        if(t0min > t1min){
+          stack[sp++] = c1;
+          stack[sp++] = c0;
+        } else {
+          stack[sp++] = c0;
+          stack[sp++] = c1;
+        }
+      } else if(hit0){
+        stack[sp++] = c0;
+      } else if(hit1){
+        stack[sp++] = c1;
       }
-      shadow += blk?0.0:1.0;
     }
   }
-  return shadow/float(S*S);
-}
 
-vec3 raytrace(vec2 uv) {
-  vec3 fwd = normalize(u_cameraTarget - u_cameraPos);
-  vec3 right=normalize(cross(fwd,u_cameraUp));
-  vec3 upv =cross(right,fwd);
-
-  uv = uv*2.0 -1.0;
-  uv.x *= u_aspect;
-  float focal = 1.0/tan(u_fov*0.5);
-  vec3 ro = u_cameraPos;
-  vec3 rd = normalize(fwd*focal + right*uv.x + upv*uv.y);
-
-  float closest=1e20; int hit=-1;
-  for(int i=0;i<SPHERE_COUNT;i++){
-    float t=sphereIntersect(ro,rd,u_sphereCenters[i],u_sphereRadii[i]);
-    if(t>0.0 && t<closest){ closest=t; hit=i; }
+  if(bestT < 1e19){
+    vec3 hit = ro + bestT*rd;
+    vec3 L   = normalize(light - hit);
+    float d  = max(dot(bestN, L), 0.0);
+    return vec3(d);
   }
-  if(hit<0) return vec3(0.6,0.8,1.0);
-
-  vec3 H = ro + closest*rd;
-  vec3 N = normalize(H - u_sphereCenters[hit]);
-  vec3 Lp=vec3(5.,5.,5.), Ld=normalize(Lp-H);
-  float diff = max(dot(N,Ld),0.0);
-  if(diff<=0.) return vec3(0.);
-
-  float sh = computeSoftShadow(H,N,Lp);
-  return u_colors[hit]*(diff*sh);
+  return vec3(0.6,0.8,1.0);
 }
 
 void main(){
-  vec3 col=vec3(0.0);
-  float offs=1.0/800.0;
-  for(int dx=0;dx<SQRT_SAMPLES;dx++){
-    for(int dy=0;dy<SQRT_SAMPLES;dy++){
-      vec2 jit=(vec2(dx,dy)+random(v_uv+vec2(dx,dy)))/float(SQRT_SAMPLES);
-      vec2 uv2=v_uv+(jit-0.5)*offs;
-      col += raytrace(uv2);
-    }
-  }
-  col /= float(SQRT_SAMPLES*SQRT_SAMPLES);
-
-  vec4 curr = vec4(col,1.0);
-  vec4 prev = texture(u_prevFrameTex, v_uv);
-  float count= float(min(u_frameIndex+1, u_maxFrames));
-  float alpha = 1.0/count;
-  outColor = mix(prev, curr, alpha);
+  outColor = vec4(raytrace(v_uv),1.0);
 }
