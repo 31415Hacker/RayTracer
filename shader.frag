@@ -127,28 +127,24 @@ vec3 raytrace(vec2 uv) {
 
         float tmin, tmax;
         if (!intersectAABB(ro, invRd, mn, mx, tmin, tmax)) continue;
-        // early‐exit if this node is farther than an existing hit
         if (tmin > bestT) continue;
 
         if (rc < 0) {
-            // leaf node: left = triStart, rc = –count
+            // Leaf node
             int start = left;
             int cnt   = -rc;
             for (int j = 0; j < cnt; ++j) {
                 int ti = start + j;
-                // 1) PREFETCH positions
                 vec3 v0 = fetchPos(ti, 0);
                 vec3 v1 = fetchPos(ti, 1);
                 vec3 v2 = fetchPos(ti, 2);
-                // 2) PREFETCH normals
                 vec3 n0 = fetchNor(ti, 0);
                 vec3 n1 = fetchNor(ti, 1);
                 vec3 n2 = fetchNor(ti, 2);
-                // 3) INTERSECT
+
                 float t, u, v;
                 if (triIntersect(ro, rd, v0, v1, v2, t, u, v) && t < bestT) {
                     bestT = t;
-                    // 4) SMOOTH‐SHADE
                     bestN = normalize(
                         n0 * (1.0 - u - v) +
                         n1 * u +
@@ -157,27 +153,23 @@ vec3 raytrace(vec2 uv) {
                 }
             }
         } else {
-            // internal node: left & rc are child indices
-            int c0 = left, c1 = rc;
-            // fetch both child AABBs and entry ts
-            vec3 mn0, mx0, mn1, mx1;
-            int dummy;
-            float t0min, t0max, t1min, t1max;
-            fetchNode(c0, mn0, mx0, dummy, dummy);
-            fetchNode(c1, mn1, mx1, dummy, dummy);
+            // Internal node
+            int c0 = left;
+            int c1 = rc;
 
+            vec3 mn0, mx0, mn1, mx1;
+            int tmp;
+            fetchNode(c0, mn0, mx0, tmp, tmp);
+            fetchNode(c1, mn1, mx1, tmp, tmp);
+
+            float t0min, t0max, t1min, t1max;
             bool hit0 = intersectAABB(ro, invRd, mn0, mx0, t0min, t0max);
             bool hit1 = intersectAABB(ro, invRd, mn1, mx1, t1min, t1max);
 
             if (hit0 && hit1) {
-                // push farther child first
-                if (t0min > t1min) {
-                    stack[sp++] = c0;
-                    stack[sp++] = c1;
-                } else {
-                    stack[sp++] = c1;
-                    stack[sp++] = c0;
-                }
+                bool firstIsC1 = t1min < t0min;
+                stack[sp++] = firstIsC1 ? c0 : c1;
+                stack[sp++] = firstIsC1 ? c1 : c0;
             } else if (hit0) {
                 stack[sp++] = c0;
             } else if (hit1) {
@@ -192,7 +184,7 @@ vec3 raytrace(vec2 uv) {
         float diff = max(dot(bestN, L), 0.0);
         return vec3(diff);
     }
-    // background
+
     return vec3(0.6, 0.8, 1.0);
 }
 
