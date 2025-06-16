@@ -1,12 +1,20 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>WebGL2 Raytracer - Multiple Spheres</title>
-  <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <title>WebGPU BVH Raytracer</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    #fpsCounter {
+      position: absolute; top: 0; left: 0;
+      padding: 8px; color: #fff;
+      background: rgba(0,0,0,0.5); font: 14px sans-serif;
+    }
+  </style>
 </head>
 <body>
-  <div id="fpsCounter">FPS: 0</div>
-  <canvas id="glCanvas"></canvas>
-  <script src="script.js" type="module"></script>
+  <canvas id="gpuCanvas" width="1200" height="800"></canvas>
+  <div id="fpsCounter"></div>
+  <script type="module" src="script.js"></script>
 </body>
 </html>
