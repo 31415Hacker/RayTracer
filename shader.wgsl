@@ -1,272 +1,264 @@
-// shader.wgsl
-
-//////////////////////////////////////////////////////////
-// Camera & Buffer Bindings
-//////////////////////////////////////////////////////////
-
-struct Camera {
-  origin:     vec4<f32>,    // xyz: camera position
-  forward:    vec4<f32>,    // camera forward vector
-  right:      vec4<f32>,    // camera right vector
-  up:         vec4<f32>,    // camera up vector
-  fl_aspect:  vec2<f32>,    // [focal_length, aspect_ratio]
-  resolution: vec2<f32>,    // [width, height]
-  model:      mat4x4<f32>   // model matrix (rotation only)
+// — Uniforms shared by both vertex and fragment stages —
+struct Uniforms {
+    cameraPos:    vec4<f32>,
+    cameraTarget: vec4<f32>,
+    cameraUp:     vec4<f32>,
+    lightPos:     vec4<f32>,
+    fovAspect:    vec2<f32>,
+    pad:          vec2<f32>,
+    model:        mat4x4<f32>,
 };
 
-@group(0) @binding(0) var<uniform> cam      : Camera;
-@group(0) @binding(1) var<storage,read> posBuf   : array<vec3<f32>>;
-@group(0) @binding(2) var<storage,read> normBuf  : array<vec3<f32>>;
-@group(0) @binding(3) var<storage,read> nodeBuf  : array<vec4<f32>>;
+// — Storage buffers for triangle data & BVH nodes —
+// triPos0/1: vec4<f32> arrays holding xyz position in .xyz
+// triNor0/1: vec4<f32> arrays holding xyz normal in .xyz
+// bvhNodes0/1: vec4<f32> arrays holding [mn.x,mn.y,mn.z,left] and [mx.x,mx.y,mx.z,right]
+@group(0) @binding(0) var<storage, read> triPos0:   array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> triPos1:   array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> triNor0:   array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read> triNor1:   array<vec4<f32>>;
+@group(0) @binding(4) var<storage, read> bvhNodes0: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read> bvhNodes1: array<vec4<f32>>;
 
-//////////////////////////////////////////////////////////
-// Intersection Helpers
-//////////////////////////////////////////////////////////
+// — Uniform block —
+@group(0) @binding(6) var<uniform> uniforms: Uniforms;
 
-// Ray-AABB intersection -> [tmin, tmax]
-fn intersectAABB(ro:vec3<f32>, invRd:vec3<f32>, mn:vec3<f32>, mx:vec3<f32>)
-                 -> vec2<f32> {
-  let t0 = (mn - ro) * invRd;
-  let t1 = (mx - ro) * invRd;
-  let tmin3 = min(t0, t1);
-  let tmax3 = max(t0, t1);
-  let tmin = max(max(tmin3.x, tmin3.y), tmin3.z);
-  let tmax = min(min(tmax3.x, tmax3.y), tmax3.z);
-  return vec2<f32>(tmin, tmax);
-}
+// — Vertex→fragment payload —
+struct VSOut {
+    @builtin(position) Position: vec4<f32>,
+    @location(0)       uv:       vec2<f32>,
+};
 
-// Watertight, winding-agnostic ray–triangle test
-// returns (t, u, v, 1.0) on hit, or (0,0,0,0) on miss
-fn triIntersect(
-    ro: vec3<f32>,
-    rd: vec3<f32>,
-    v0: vec3<f32>,
-    v1: vec3<f32>,
-    v2: vec3<f32>
-) -> vec4<f32> {
-  // 1) pick the projection axis
-  let ax = abs(rd.x);
-  let ay = abs(rd.y);
-  let az = abs(rd.z);
-  // Determine the dominant axis (kz) to project the triangle onto
-  let kz = select(select(0u, 1u, ay > ax), 2u, az > max(ax, ay));
-  let kx = (kz + 1u) % 3u;
-  let ky = (kx + 1u) % 3u;
-
-  // 2) shear & scale factors
-  let d  = rd[kz];
-  // Handle cases where d (ray component along kz) is zero or very small
-  if (abs(d) < 1e-8) { return vec4<f32>(0); } // Ray is parallel to projection plane
-  let Sx = rd[kx] / d;
-  let Sy = rd[ky] / d;
-  let Sz = 1.0 / d; // This is the inverse of d
-
-  // 3) origin offset
-  let Ok = ro[kz];
-  let Ox = ro[kx];
-  let Oy = ro[ky];
-
-  // 4) shear all vertices
-  let tz0 = v0[kz] - Ok;
-  let tx0 = v0[kx] - Ox - Sx * tz0;
-  let ty0 = v0[ky] - Oy - Sy * tz0;
-  let v0s = vec3<f32>(tx0, ty0, tz0 * Sz); // tz0 * Sz effectively scales tz0 by 1/d
-
-  let tz1 = v1[kz] - Ok;
-  let tx1 = v1[kx] - Ox - Sx * tz1;
-  let ty1 = v1[ky] - Oy - Sy * tz1;
-  let v1s = vec3<f32>(tx1, ty1, tz1 * Sz);
-
-  let tz2 = v2[kz] - Ok;
-  let tx2 = v2[kx] - Ox - Sx * tz2;
-  let ty2 = v2[ky] - Oy - Sy * tz2;
-  let v2s = vec3<f32>(tx2, ty2, tz2 * Sz);
-
-  // 5) 2D edge-functions (cross products in 2D)
-  let e0 = v1s.x * v2s.y - v1s.y * v2s.x;
-  let e1 = v2s.x * v0s.y - v2s.y * v0s.x;
-  let e2 = v0s.x * v1s.y - v0s.y * v1s.x;
-
-  // 6) reject if signs are mixed (point is outside triangle in 2D projection)
-  let hasNeg = (e0 < 0.0) || (e1 < 0.0) || (e2 < 0.0);
-  let hasPos = (e0 > 0.0) || (e1 > 0.0) || (e2 > 0.0);
-  if (hasNeg && hasPos) {
-    return vec4<f32>(0); // Ray misses the triangle in 2D
-  }
-
-  // 7) compute t (distance along ray)
-  let sum = e0 + e1 + e2;
-  // If sum is zero, the triangle is degenerate or parallel to the projection plane
-  if (abs(sum) < 1e-8) { // Use an epsilon for float comparison
-    return vec4<f32>(0);
-  }
-  let tScaled = e0 * v0s.z + e1 * v1s.z + e2 * v2s.z;
-  let t = tScaled / sum; // This is the actual t value along the ray
-
-  // Reject hits behind the ray origin
-  if (t <= 0.0) { // Or a small epsilon like 1e-4 to avoid self-intersection issues
-    return vec4<f32>(0);
-  }
-
-  // 8) barycentrics
-  let invSum = 1.0 / sum;
-  let u = e0 * invSum;
-  let v = e1 * invSum;
-
-  return vec4<f32>(t, u, v, 1.0); // Return hit (t, u, v, 1.0)
-}
-
-//////////////////////////////////////////////////////////
-// Full-Screen Quad Vertex Shader
-//////////////////////////////////////////////////////////
-
+// — Fullscreen‐quad vertex shader →
 @vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
-  // A standard full-screen triangle-strip quad
-  var quad = array<vec2<f32>,4>(
-    vec2<f32>(-1.0, -1.0),
-    vec2<f32>( 1.0, -1.0),
-    vec2<f32>(-1.0,  1.0),
-    vec2<f32>( 1.0,  1.0)
-  );
-  return vec4<f32>(quad[vi], 0.0, 1.0);
+fn vs_main(@location(0) pos: vec2<f32>) -> VSOut {
+    var out: VSOut;
+    out.Position = vec4<f32>(pos, 0.0, 1.0);
+    // Map from [-1,1] to [0,1]
+    out.uv = pos * vec2<f32>(0.5, 0.5) + vec2<f32>(0.5, 0.5);
+    return out;
 }
 
-//////////////////////////////////////////////////////////
-// Ray-Tracing Fragment Shader - FIXED RENDERING BUG
-//////////////////////////////////////////////////////////
-
-@fragment
-fn fs_main(@builtin(position) fc: vec4<f32>) -> @location(0) vec4<f32> {
-  // 1) Compute NDC uv in [-1,1]
-  let uv = (fc.xy / cam.resolution) * 2.0 - vec2<f32>(1.0, 1.0);
-
-  // 2) Build world-space ray
-  let fl   = cam.fl_aspect.x;
-  let asp  = cam.fl_aspect.y;
-  let ro_w = cam.origin.xyz;
-  let rd_w = normalize(
-    cam.forward.xyz * fl +
-    cam.right.xyz   * uv.x * asp +
-    cam.up.xyz      * uv.y
-  );
-
-  // 3) Transform ray into object space (rotation only)
-  let R    = mat3x3<f32>(
-    cam.model[0].xyz,
-    cam.model[1].xyz,
-    cam.model[2].xyz
-  );
-  let invM = transpose(R);
-  let ro    = invM * ro_w;
-  let rd    = invM * rd_w;
-  let invRd = vec3<f32>(
-    select(1.0/rd.x, 1e20, abs(rd.x) < 1e-8),
-    select(1.0/rd.y, 1e20, abs(rd.y) < 1e-8),
-    select(1.0/rd.z, 1e20, abs(rd.z) < 1e-8)
-  );
-
-  // 4) BVH traversal - FIXED TRIANGLE INDEXING
-  var stack: array<u32, 64>;
-  var sp = 1u;
-  stack[0] = 0u;
-  var bestT = 1e20;
-  var bestN = vec3<f32>(0.0);
-  let MAX_STACK = 64u;
-
-  loop {
-    if (sp == 0u) { break; }
-    sp -= 1u;
-    let ni = stack[sp];
-
-    let d0 = nodeBuf[ni*2u + 0u];
-    let d1 = nodeBuf[ni*2u + 1u];
-    let mn = d0.xyz;
-    let mx = d1.xyz;
-    let leftOrStart = i32(round(d0.w));
-    let rightOrCount = i32(round(d1.w));
-
-    let ts = intersectAABB(ro, invRd, mn, mx);
-    if (ts.x > ts.y || ts.x > bestT) {
-      continue;
-    }
-
-    if (rightOrCount < 0) {
-      // FIX: Correct triangle indexing - use base triangle index directly
-      let startTri = u32(leftOrStart);  // Starting triangle index
-      let cnt   = u32(-rightOrCount);   // Triangle count
-      
-      for (var j = 0u; j < cnt; j++) {
-        let triIdx = startTri + j;      // Current triangle index
-        let baseIdx = triIdx * 3u;      // Base vertex index for this triangle
-        
-        // Fetch triangle vertices - FIXED INDEXING
-        let v0 = posBuf[baseIdx + 0u];
-        let v1 = posBuf[baseIdx + 1u];
-        let v2 = posBuf[baseIdx + 2u];
-        
-        let ri = triIntersect(ro, rd, v0, v1, v2);
-
-        if (ri.w > 0.5 && ri.x < bestT) {
-          bestT = ri.x;
-          
-          // Fetch corresponding normals
-          let n0 = normBuf[baseIdx + 0u];
-          let n1 = normBuf[baseIdx + 1u];
-          let n2 = normBuf[baseIdx + 2u];
-          
-          // Interpolate normal using barycentric coordinates
-          bestN = normalize(n0*(1.0-ri.y-ri.z) + n1*ri.y + n2*ri.z);
-        }
-      }
+// — Helpers to fetch from split SSBOs —
+fn fetchtriPos(idx: u32) -> vec3<f32> {
+    let COUNT: u32 = __COUNT_POS0__;
+    if (idx < COUNT) {
+        return triPos0[idx].xyz;
     } else {
-      // Internal node
-      let c0 = u32(leftOrStart);
-      let c1 = u32(rightOrCount);
-
-      let ts0 = intersectAABB(ro, invRd, 
-                 nodeBuf[c0*2u].xyz, nodeBuf[c0*2u+1u].xyz);
-      let ts1 = intersectAABB(ro, invRd,
-                 nodeBuf[c1*2u].xyz, nodeBuf[c1*2u+1u].xyz);
-
-      let hit0 = ts0.x <= ts0.y && ts0.x <= bestT;
-      let hit1 = ts1.x <= ts1.y && ts1.x <= bestT;
-
-      if (hit0 && hit1) {
-        if (ts0.x < ts1.x) {
-          if (sp < MAX_STACK-1u) {
-            stack[sp] = c1; sp += 1u;
-            stack[sp] = c0; sp += 1u;
-          }
-        } else {
-          if (sp < MAX_STACK-1u) {
-            stack[sp] = c0; sp += 1u;
-            stack[sp] = c1; sp += 1u;
-          }
-        }
-      } else if (hit0 && sp < MAX_STACK) {
-        stack[sp] = c0; sp += 1u;
-      } else if (hit1 && sp < MAX_STACK) {
-        stack[sp] = c1; sp += 1u;
-      }
+        return triPos1[idx - COUNT].xyz;
     }
-  }
+}
+fn fetchtriNor(idx: u32) -> vec3<f32> {
+    let COUNT: u32 = __COUNT_NOR0__;
+    if (idx < COUNT) {
+        return triNor0[idx].xyz;
+    } else {
+        return triNor1[idx - COUNT].xyz;
+    }
+}
+fn fetchbvhNodes(idx: u32) -> vec4<f32> {
+    let COUNT: u32 = __COUNT_BVH0__;
+    if (idx < COUNT) {
+        return bvhNodes0[idx];
+    } else {
+        return bvhNodes1[idx - COUNT];
+    }
+}
 
-  // 5) Shading
-  if (bestT < 1e19) {
-    let hit = ro + rd * bestT;
-    let lightPos_world = vec3<f32>(5.0, 5.0, 5.0);
-    let lightPos = invM * lightPos_world;
-    
-    let L = normalize(lightPos - hit);
-    let V = normalize(-rd);
-    let H = normalize(L + V);
-    let diff = max(dot(bestN, L), 0.0);
-    let spec = pow(max(dot(bestN, H), 0.0), 32.0);
-    let color = vec3<f32>(1.0) * (0.8 * diff + 0.4 * spec);
-    return vec4<f32>(color, 1.0);
-  }
+// — AABB intersection helper —
+fn intersectAABB(
+    ro:      vec3<f32>,
+    invRd:   vec3<f32>,
+    mn:      vec3<f32>,
+    mx:      vec3<f32>,
+    tminOut: ptr<function, f32>,
+    tmaxOut: ptr<function, f32>,
+) -> bool {
+    let t0 = (mn - ro) * invRd;
+    let t1 = (mx - ro) * invRd;
+    let tmin3 = min(t0, t1);
+    let tmax3 = max(t0, t1);
+    let tmin = max(max(tmin3.x, tmin3.y), tmin3.z);
+    let tmax = min(min(tmax3.x, tmax3.y), tmax3.z);
+    *tminOut = tmin;
+    *tmaxOut = tmax;
+    return tmax >= max(tmin, 0.0);
+}
 
-  // Background
-  return vec4<f32>(0.6, 0.8, 1.0, 1.0);
+// — Möller–Trumbore triangle intersection helper —
+fn triIntersect(
+    ro:    vec3<f32>,
+    rd:    vec3<f32>,
+    v0:    vec3<f32>,
+    v1:    vec3<f32>,
+    v2:    vec3<f32>,
+    tOut:  ptr<function, f32>,
+    uOut:  ptr<function, f32>,
+    vOut:  ptr<function, f32>,
+) -> bool {
+    let epsilon = 0.0;
+    let e1 = v1 - v0;
+    let e2 = v2 - v0;
+    let p  = cross(rd, e2);
+    let a  = dot(e1, p);
+    if (abs(a) < epsilon) { return false; }
+    let invA = 1.0 / a;
+    let s = ro - v0;
+    let u = invA * dot(s, p);
+    if (u < 0.0 || u > 1.0) { return false; }
+    let q = cross(s, e1);
+    let v = invA * dot(rd, q);
+    if (v < 0.0 || u + v > 1.0) { return false; }
+    let t = invA * dot(e2, q);
+    if (t > epsilon) {
+        *tOut = t;
+        *uOut = u;
+        *vOut = v;
+        return true;
+    }
+    return false;
+}
+
+// — Safe‐check finite vector (no NaNs or infinities) —
+fn isSafeVec3(v: vec3<f32>) -> bool {
+    return all(abs(v) <= vec3<f32>(1e30));
+}
+
+// — Fragment: ray‐trace the BVH and shade Phong diffuse —
+@fragment
+fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
+    // 1) Generate primary ray in world space
+    let ro_w    = uniforms.cameraPos.xyz;
+    let forward = normalize(uniforms.cameraTarget.xyz - ro_w);
+    let right   = normalize(cross(forward, uniforms.cameraUp.xyz));
+    let upv     = cross(right, forward);
+
+    var uv = in.uv * vec2<f32>(2.0, 2.0) - vec2<f32>(1.0, 1.0);
+    uv.x = uv.x * uniforms.fovAspect.y;
+    let fl   = 1.0 / tan(uniforms.fovAspect.x * 0.5);
+    let rd_w = normalize(forward * fl + right * uv.x + upv * uv.y);
+
+    // 2) Transform ray to object (model) space
+    let M3 = mat3x3<f32>(
+        uniforms.model[0].xyz,
+        uniforms.model[1].xyz,
+        uniforms.model[2].xyz
+    );
+    let ro    = M3 * ro_w;
+    let rd    = normalize(M3 * rd_w);
+    let invRd = 1.0 / rd;
+
+    // 3) BVH traversal using a small stack
+    var stack: array<i32, 32>;
+    var sp:    i32 = 1;
+    stack[0] = 0;
+
+    var bestT: f32      = 1e20;
+    var bestN: vec3<f32> = vec3<f32>(0.0);
+
+    loop {
+        if (sp == 0) { break; }
+        sp -= 1;
+        let ni = stack[sp];
+
+        // Fetch this node’s AABB & child‐info in two vec4 loads
+        let i0    = u32(ni * 2);
+        let node0 = fetchbvhNodes(i0);      // .xyz = mn, .w = left index
+        let node1 = fetchbvhNodes(i0 + 1u); // .xyz = mx, .w = right or -count
+        let mn    = node0.xyz;
+        let mx    = node1.xyz;
+
+        var tmin: f32; var tmax: f32;
+        if (!intersectAABB(ro, invRd, mn, mx, &tmin, &tmax) || tmin > bestT) {
+            continue;
+        }
+
+        let rv = node1.w;
+        if (rv < 0.0) {
+            // Leaf node: iterate triangles
+            let start = i32(node0.w);
+            let cnt   = -i32(rv);
+            for (var j = 0; j < cnt; j = j + 1) {
+                let triI = u32(start + j);
+                let v0   = fetchtriPos(triI * 3u + 0u);
+                let v1   = fetchtriPos(triI * 3u + 1u);
+                let v2   = fetchtriPos(triI * 3u + 2u);
+                let n0   = fetchtriNor(triI * 3u + 0u);
+                let n1   = fetchtriNor(triI * 3u + 1u);
+                let n2   = fetchtriNor(triI * 3u + 2u);
+
+                // Back-face cull
+                if (dot(normalize(cross(v1 - v0, v2 - v0)), rd) > 0.0) {
+                    continue;
+                }
+
+                var t: f32; var u: f32; var v: f32;
+                if (triIntersect(ro, rd, v0, v1, v2, &t, &u, &v) && t < bestT) {
+                    bestT = t;
+                    bestN = normalize(n0 * (1.0 - u - v) + n1 * u + n2 * v);
+                }
+            }
+        } else {
+            // Internal node: test both children and push near-first
+            let c0  = i32(node0.w);
+            let c1  = i32(rv);
+
+            // Child 0 AABB
+            let j0   = u32(c0 * 2);
+            let mn0  = fetchbvhNodes(j0).xyz;
+            let mx0  = fetchbvhNodes(j0 + 1u).xyz;
+            // Child 1 AABB
+            let j1   = u32(c1 * 2);
+            let mn1  = fetchbvhNodes(j1).xyz;
+            let mx1  = fetchbvhNodes(j1 + 1u).xyz;
+
+            var t0min: f32; var t0max: f32;
+            var t1min: f32; var t1max: f32;
+            let hit0 = intersectAABB(ro, invRd, mn0, mx0, &t0min, &t0max) && t0min <= bestT;
+            let hit1 = intersectAABB(ro, invRd, mn1, mx1, &t1min, &t1max) && t1min <= bestT;
+
+            if (hit0 && hit1) {
+                // Far-first push
+                if (t0min <= t1min) {
+                    if (sp < 32) { stack[sp] = c1; sp += 1; }
+                    if (sp < 32) { stack[sp] = c0; sp += 1; }
+                } else {
+                    if (sp < 32) { stack[sp] = c0; sp += 1; }
+                    if (sp < 32) { stack[sp] = c1; sp += 1; }
+                }
+            } else if (hit0) {
+                if (sp < 32) { stack[sp] = c0; sp += 1; }
+            } else if (hit1) {
+                if (sp < 32) { stack[sp] = c1; sp += 1; }
+            }
+        }
+    }
+
+    // 4) Shade if hit, otherwise sky
+    if (bestT < 1e19) {
+        let hit_os = ro + bestT * rd;
+        let hit_ws = (uniforms.model * vec4<f32>(hit_os, 1.0)).xyz;
+
+        // Transform normal from object→world
+        if (length(bestN) < 1e-4 || !isSafeVec3(bestN)) {
+            bestN = vec3<f32>(0.0, 1.0, 0.0);
+        }
+        var Nws = normalize(transpose(M3) * bestN);
+        if (!isSafeVec3(Nws)) {
+            Nws = vec3<f32>(0.0, 1.0, 0.0);
+        }
+
+        // Compute light direction
+        var L = hit_ws - uniforms.lightPos.xyz;
+        if (length(L) < 1e-4 || !isSafeVec3(L)) {
+            L = vec3<f32>(0.0, 1.0, 0.0);
+        }
+        L = normalize(L);
+
+        let diff = max(dot(Nws, L), 0.0);
+        return vec4<f32>(diff, diff, diff, 1.0);
+    }
+
+    // Sky background
+    return vec4<f32>(0.6, 0.8, 1.0, 1.0);
 }
