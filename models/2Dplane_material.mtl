@@ -1,0 +1,9 @@
+newmtl TexturedPlaneMaterial
+	illum 2
+	Kd 1 1 1
+	Ke 0 0 0
+	Pr 0
+	Pm 0
+	d 1
+	Tr 0
+	map_Kd texture.png

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Offline Digit Recognizer</title>
+  <style>
+    body {
+      font-family: monospace;
+      background: #111;
+      color: #fff;
+      text-align: center;
+      padding: 20px;
+    }
+    canvas {
+      border: 1px solid #fff;
+      margin-bottom: 10px;
+      cursor: crosshair;
+    }
+    input, button {
+      margin: 5px;
+      padding: 5px 10px;
+    }
+    ul#rankings {
+      list-style-type: none;
+      padding: 0;
+      margin-top: 10px;
+    }
+    ul#rankings li {
+      font-size: 16px;
+      margin: 2px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>Draw a Digit</h1>
+  <canvas id="canvas" width="280" height="280"></canvas><br>
+  <input type="file" id="fileInput" accept=".dat">
+  <button onclick="clearCanvas()">Clear</button>
+  <button onclick="predictDigit()">Predict</button>
+  <p id="output">Prediction: N/A</p>
+  <ul id="rankings"></ul>
+
+  <script>
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "black";
+    ctx.fillRect(0, 0, 280, 280);
+
+    let painting = false;
+    canvas.addEventListener("mousedown", () => painting = true);
+    canvas.addEventListener("mouseup", () => painting = false);
+    canvas.addEventListener("mouseleave", () => painting = false);
+    canvas.addEventListener("mousemove", draw);
+
+    function draw(e) {
+      if (!painting) return;
+      ctx.fillStyle = "white";
+      ctx.beginPath();
+      ctx.arc(e.offsetX, e.offsetY, 10, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function clearCanvas() {
+      ctx.fillStyle = "black";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      document.getElementById("output").textContent = "Prediction: N/A";
+      document.getElementById("rankings").innerHTML = "";
+    }
+
+    // Network structure
+    let L = 0, sz = [], W = [], B = [];
+
+    document.getElementById("fileInput").addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = function() {
+        const buffer = new DataView(reader.result);
+        let offset = 0;
+        L = buffer.getInt32(offset, true); offset += 4;
+        sz = [];
+        for (let i = 0; i < L; i++) {
+          sz.push(buffer.getInt32(offset, true)); offset += 4;
+        }
+        W = [], B = [];
+        for (let l = 1; l < L; l++) {
+          const wsize = sz[l] * sz[l - 1];
+          const bsize = sz[l];
+          let w = new Float32Array(wsize);
+          for (let i = 0; i < wsize; i++) {
+            w[i] = buffer.getFloat32(offset, true); offset += 4;
+          }
+          let b = new Float32Array(bsize);
+          for (let i = 0; i < bsize; i++) {
+            b[i] = buffer.getFloat32(offset, true); offset += 4;
+          }
+          W.push(w);
+          B.push(b);
+        }
+        alert("Network loaded: " + sz.join(" → "));
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    function predictDigit() {
+      if (L === 0) {
+        alert("Please load a neural network file first.");
+        return;
+      }
+
+      const small = document.createElement("canvas");
+      small.width = 28;
+      small.height = 28;
+      const sctx = small.getContext("2d");
+      sctx.drawImage(canvas, 0, 0, 28, 28);
+      const imgData = sctx.getImageData(0, 0, 28, 28);
+      const input = new Float32Array(784);
+      for (let i = 0; i < 784; i++) {
+        input[i] = imgData.data[i * 4] / 255; // Normalize
+        console.log(input[i]);
+      }
+
+      const output = forward(input);
+      const prediction = output.indexOf(Math.max(...output));
+      document.getElementById("output").textContent = `Prediction: ${prediction}`;
+
+      // Display sorted rankings
+      const ranked = output.map((val, idx) => ({ val, idx }))
+                           .sort((a, b) => b.val - a.val);
+      document.getElementById("rankings").innerHTML = ranked.map(r => `
+        <li>${r.idx}: ${(r.val * 100).toFixed(2)}%</li>
+      `).join('');
+    }
+
+    function forward(input) {
+      let a = input;
+      for (let l = 1; l < L - 1; l++) {
+        const z = new Float32Array(sz[l]);
+        for (let i = 0; i < sz[l]; i++) {
+          let sum = B[l - 1][i];
+          for (let j = 0; j < sz[l - 1]; j++) {
+            sum += W[l - 1][i * sz[l - 1] + j] * a[j];
+          }
+          z[i] = Math.max(0, sum); // ReLU
+        }
+        a = z;
+      }
+
+      // Softmax output layer
+      const z = new Float32Array(sz[L - 1]);
+      let maxLogit = -Infinity;
+      for (let i = 0; i < sz[L - 1]; i++) {
+        let sum = B[L - 2][i];
+        for (let j = 0; j < sz[L - 2]; j++) {
+          sum += W[L - 2][i * sz[L - 2] + j] * a[j];
+        }
+        z[i] = sum;
+        if (sum > maxLogit) maxLogit = sum;
+      }
+      let total = 0;
+      for (let i = 0; i < z.length; i++) {
+        z[i] = Math.exp(z[i] - maxLogit);
+        total += z[i];
+      }
+      for (let i = 0; i < z.length; i++) z[i] /= total;
+      return Array.from(z);
+    }
+
+    canvas.addEventListener("mouseup", () => {
+      painting = false;
+      predictDigit(); // trigger prediction after drawing
+    });
+  </script>
+</body>
+</html>

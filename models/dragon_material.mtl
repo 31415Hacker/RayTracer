@@ -1,0 +1,23 @@
+# Aspose.3D Wavefront OBJ Exporter
+# Copyright 2004-2025 Aspose Pty Ltd.
+# File created: 06/03/2025 02:17:40
+
+newmtl MI_M_B_44_Qishilong_body02_Inst
+	illum 2
+	Kd 1 1 1
+	Ke 0 0 0
+	Pr 0
+	Pm 0
+	d 1
+	Tr 0
+	map_Kd MI_M_B_44_Qishilong_body02_Inst_diffuse.jpg
+	norm MI_M_B_44_Qishilong_body02_Inst_normal.jpg
+newmtl MI_M_B_44_Qishilong_body02_2_Inst
+	illum 2
+	Kd 1 1 1
+	Ke 0 0 0
+	Pr 0
+	Pm 0
+	d 1
+	Tr 0
+	map_Kd MI_M_B_44_Qishilong_body02_2_Inst_diffuse.jpg

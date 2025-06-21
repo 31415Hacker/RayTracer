@@ -1,0 +1,28 @@
+mtllib 2Dplane_material.mtl
+o Textured2DPlane
+
+# Vertices (x, y, z)
+v -1000.0 0.0 -1000.0
+v  1000.0 0.0 -1000.0
+v -1000.0 0.0 1000.0
+v  1000.0 0.0 1000.0
+
+# Texture coordinates (u, v)
+vt 0.0 0.0
+vt 1.0 0.0
+vt 0.0 1.0
+vt 1.0 1.0
+
+# Normals (facing up y- and down y+)
+vn 0.0 -1.0 0.0
+vn 0.0 1.0 0.0
+
+# Use material
+usemtl TexturedPlaneMaterial
+
+# Faces (v/vt/vn)
+f 1/1/1 2/2/1 3/3/1
+f 2/2/1 4/4/1 3/3/1
+
+f 3/3/2 2/2/2 1/1/2
+f 3/3/2 4/4/2 2/2/2

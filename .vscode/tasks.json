@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build App with Prompt",
+      "type": "shell",
+      "command": "./build_with_prompt.sh",
+      "args": ["${file}"],
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}

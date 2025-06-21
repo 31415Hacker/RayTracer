@@ -1,0 +1,25 @@
+# material.mtl (renamed from material.lib):
+
+newmtl Material_85
+    illum 2
+    Kd 1 1 1                  # fallback color (will be overridden once texture is bound)
+    Ke 0 0 0
+    d  1
+    Tr 0
+    map_Kd Material_85_baseColor.jpg
+    # We want to treat this as a "combined metallic/roughness" map:
+    # tinyobjloader will store it in unknown_parameter["map_Pr"] and unknown_parameter["map_Pm"]
+    map_Pr Material_85_metallicRoughness_metal.jpg
+    map_Pm Material_85_metallicRoughness_metal.jpg
+    map_Bump Material_85_normal.jpg
+
+newmtl Material_86
+    illum 2
+    Kd 1 1 1
+    Ke 0 0 0
+    d  1
+    Tr 0
+    map_Kd Material_86_baseColor.png
+    map_Pr Material_85_metallicRoughness_metal.jpg
+    map_Pm Material_85_metallicRoughness_metal.jpg
+    map_Bump Material_85_normal.jpg
