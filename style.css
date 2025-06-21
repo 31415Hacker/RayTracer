@@ -14,3 +14,22 @@ canvas { width: 100vw; height: 100vh; display: block; }
   z-index: 1000;
   pointer-events: none;
 }
+#controls {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 12px;
+  font-family: sans-serif;
+  background: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  border-radius: 6px;
+  z-index: 1000;
+  max-width: 200px;
+}
+#controls label {
+  display: block;
+  margin-bottom: 8px;
+}
+#controls input {
+  width: 100%;
+}
