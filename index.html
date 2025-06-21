@@ -3,20 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <title>WebGPU BVH Raytracer</title>
-  <style>
-    body { margin: 0; overflow: hidden; }
-    #fpsCounter {
-      position: absolute; top: 0; left: 0;
-      padding: 8px; color: #fff;
-      background: rgba(0,0,0,0.5); font: 14px sans-serif;
-    }
-  </style>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <canvas id="gpuCanvas" width="1200" height="800"></canvas>
-  <div id="fpsCounter"></div>
-  <!-- in your HTML’s <head> or right before </body> -->
-  <script src="https://cdn.jsdelivr.net/npm/webgl-obj-loader@2.0.3/dist/webgl-obj-loader.min.js"></script>
+  <div id="fpsCounter">Building BVH...</div>
+  <div id="controls">
+    <label>Scale X <input type="range" id="scaleX" min="0.1" max="5" step="0.1" value="1"></label><br>
+    <label>Scale Y <input type="range" id="scaleY" min="0.1" max="5" step="0.1" value="1"></label><br>
+    <label>Scale Z <input type="range" id="scaleZ" min="0.1" max="5" step="0.1" value="1"></label><br><br>
+
+    <label>Rotation X <input type="range" id="rotX" min="-180" max="180" step="1" value="0"></label><br>
+    <label>Rotation Y <input type="range" id="rotY" min="-180" max="180" step="1" value="0"></label><br>
+    <label>Rotation Z <input type="range" id="rotZ" min="-180" max="180" step="1" value="0"></label><br><br>
+
+    <label>Position X <input type="range" id="posX" min="-2" max="2" step="0.1" value="0"></label><br>
+    <label>Position Y <input type="range" id="posY" min="-2" max="2" step="0.1" value="0"></label><br>
+    <label>Position Z <input type="range" id="posZ" min="-2" max="2" step="0.1" value="0"></label><br>
+  </div>
   <script type="module" src="script.js"></script>
 </body>
 </html>
