@@ -508,6 +508,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     // Build LBVH
     const start = performance.now();
+    document.getElementById("fpsCounter").textContent = 'Building GPU-based BVH...';
     const bvh = await buildLBVH(raw, 1);
     console.log(JSON.stringify(bvh));
     const end = performance.now();
