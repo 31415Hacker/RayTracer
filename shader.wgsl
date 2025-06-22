@@ -118,75 +118,110 @@ fn toObjectSpace(ro_w: vec3<f32>, rd_w: vec3<f32>) -> RayData {
     return RayData(ro4.xyz, rdObj, 1.0 / rdObj);
 }
 
-// Stack-based BVH traversal, returns nearest Hit in object space
+// shrink your stack size to, say, 16 entries
+const MAX_STACK = 16;
+
 fn traverseBVH(ro: vec3<f32>, rd: vec3<f32>, invRd: vec3<f32>) -> Hit {
-    var stack: array<i32,32>;
-    var sp:    i32 = 1;
-    stack[0]   = 0;
-    var bestT  = 1e20;
-    var bestN  = vec3<f32>(0.0);
+    var stack: array<i32, MAX_STACK>;
+    var sp:    i32 = 0;
+    var cur:   i32 = 0;            // start at root
+    var bestT: f32 = 1e20;
+    var bestN: vec3<f32> = vec3<f32>(0.0);
 
     loop {
-        if (sp == 0) { break; }
-        sp -= 1;
-        let ni = stack[sp];
-        let i0 = u32(ni * 2);
-        let b0 = fetchBVHNode(i0);
-        let b1 = fetchBVHNode(i0 + 1u);
-        let mn = b0.xyz;
-        let mx = b1.xyz;
+        if (cur < 0) { break; }
 
+        // fetch this node’s bounds & leaf flag
+        let base    = u32(cur * 2);
+        let b0      = fetchBVHNode(base);
+        let b1      = fetchBVHNode(base + 1u);
+        let mn      = b0.xyz;
+        let mx      = b1.xyz;
+        let isLeaf  = (b1.w < 0.0);
+
+        // AABB test
         var tmin: f32; var tmax: f32;
-        if (!intersectAABB(ro, invRd, mn, mx, &tmin, &tmax) || tmin > bestT) {
-            continue;
+        if (intersectAABB(ro, invRd, mn, mx, &tmin, &tmax) && tmin <= bestT) {
+            if (isLeaf) {
+                // ----- leaf: intersect triangles -----
+                let start = i32(b0.w);
+                let cnt   = -i32(b1.w);
+                for (var j = 0; j < cnt; j = j + 1) {
+                    let ti = u32(start + j);
+                    let v0 = fetchTriPos(ti*3u + 0u);
+                    let v1 = fetchTriPos(ti*3u + 1u);
+                    let v2 = fetchTriPos(ti*3u + 2u);
+                    // backface cull
+                    if (dot(cross(v1 - v0, v2 - v0), rd) > 0.0) { continue; }
+                    var t: f32; var u: f32; var v: f32;
+                    if (triIntersect(ro, rd, v0, v1, v2, &t, &u, &v) && t < bestT) {
+                        bestT = t;
+                        let n0 = fetchTriNor(ti*3u + 0u);
+                        let n1 = fetchTriNor(ti*3u + 1u);
+                        let n2 = fetchTriNor(ti*3u + 2u);
+                        bestN = normalize(n0*(1.0-u-v) + n1*u + n2*v);
+                    }
+                }
+                // pop far child (if any) or terminate
+                if (sp > 0) {
+                    sp = sp - 1;
+                    cur = stack[sp];
+                } else {
+                    break;
+                }
+                continue;
+            } else {
+                // ----- internal: test children one by one -----
+                let c0 = i32(b0.w);
+                let c1 = i32(b1.w);
+                var hit0: bool; var t0min: f32; var t0max: f32;
+                var hit1: bool; var t1min: f32; var t1max: f32;
+
+                // child 0
+                let mn0 = fetchBVHNode(u32(c0*2)).xyz;
+                let mx0 = fetchBVHNode(u32(c0*2)+1u).xyz;
+                hit0 = intersectAABB(ro, invRd, mn0, mx0, &t0min, &t0max) && t0min <= bestT;
+                // child 1
+                let mn1 = fetchBVHNode(u32(c1*2)).xyz;
+                let mx1 = fetchBVHNode(u32(c1*2)+1u).xyz;
+                hit1 = intersectAABB(ro, invRd, mn1, mx1, &t1min, &t1max) && t1min <= bestT;
+
+                if (hit0 && hit1) {
+                    // both survive → pick near/far
+                    if (t0min <= t1min) {
+                        // push far=1, descend near=0
+                        if (sp < MAX_STACK) { stack[sp] = c1; sp = sp + 1; }
+                        cur = c0;
+                    } else {
+                        if (sp < MAX_STACK) { stack[sp] = c0; sp = sp + 1; }
+                        cur = c1;
+                    }
+                }
+                else if (hit0) {
+                    cur = c0;
+                }
+                else if (hit1) {
+                    cur = c1;
+                }
+                else {
+                    // no child → pop
+                    if (sp > 0) {
+                        sp = sp - 1;
+                        cur = stack[sp];
+                    } else {
+                        break;
+                    }
+                }
+                continue;
+            }
         }
 
-        let rightFlag = b1.w;
-        if (rightFlag < 0.0) {
-            // leaf
-            let start = i32(b0.w);
-            let cnt   = -i32(rightFlag);
-            for (var j = 0; j < cnt; j = j + 1) {
-                let ti = u32(start + j);
-                let v0 = fetchTriPos(ti*3u + 0u);
-                let v1 = fetchTriPos(ti*3u + 1u);
-                let v2 = fetchTriPos(ti*3u + 2u);
-                let geoN = cross(v1 - v0, v2 - v0);
-                if (dot(geoN, rd) > 0.0) { continue; }
-                var t: f32; var u: f32; var v: f32;
-                if (triIntersect(ro, rd, v0, v1, v2, &t, &u, &v) && t < bestT) {
-                    bestT = t;
-                    let n0 = fetchTriNor(ti*3u + 0u);
-                    let n1 = fetchTriNor(ti*3u + 1u);
-                    let n2 = fetchTriNor(ti*3u + 2u);
-                    bestN = normalize(n0*(1.0-u-v) + n1*u + n2*v);
-                }
-            }
+        // AABB fail → pop
+        if (sp > 0) {
+            sp = sp - 1;
+            cur = stack[sp];
         } else {
-            // internal: push children
-            let c0 = i32(b0.w);
-            let c1 = i32(rightFlag);
-            var t0min: f32; var t0max: f32;
-            var t1min: f32; var t1max: f32;
-            let mn0 = fetchBVHNode(u32(c0*2)).xyz;
-            let mx0 = fetchBVHNode(u32(c0*2)+1u).xyz;
-            let mn1 = fetchBVHNode(u32(c1*2)).xyz;
-            let mx1 = fetchBVHNode(u32(c1*2)+1u).xyz;
-            let hit0 = intersectAABB(ro, invRd, mn0, mx0, &t0min, &t0max) && t0min <= bestT;
-            let hit1 = intersectAABB(ro, invRd, mn1, mx1, &t1min, &t1max) && t1min <= bestT;
-            if (hit0 && hit1) {
-                if (t0min <= t1min) {
-                    if (sp < 32) { stack[sp] = c1; sp += 1; }
-                    if (sp < 32) { stack[sp] = c0; sp += 1; }
-                } else {
-                    if (sp < 32) { stack[sp] = c0; sp += 1; }
-                    if (sp < 32) { stack[sp] = c1; sp += 1; }
-                }
-            } else if (hit0) {
-                if (sp < 32) { stack[sp] = c0; sp += 1; }
-            } else if (hit1) {
-                if (sp < 32) { stack[sp] = c1; sp += 1; }
-            }
+            break;
         }
     }
 
@@ -197,9 +232,29 @@ fn traverseBVH(ro: vec3<f32>, rd: vec3<f32>, invRd: vec3<f32>) -> Hit {
 const PI = 3.141592653589793;
 const SOFT_SAMPLES = 4;
 
-// simple 2D hash → [0,1)
+// a simple xorshift-based 32-bit hash
+fn hash_u32(x: u32) -> u32 {
+    var v = x;
+    v ^= v << 13u;
+    v ^= v >> 17u;
+    v ^= v << 5u;
+    return v;
+}
+
+/// Cheap 2D → [0,1) “random” based on bit-mixing
 fn rand2(seed: vec2<f32>) -> f32 {
-    return fract(sin(dot(seed, vec2<f32>(12.9898,78.233))) * 43758.5453);
+    // reinterpret the float bits as an integer
+    let xi = bitcast<u32>(seed.x);
+    let yi = bitcast<u32>(seed.y);
+
+    // combine the two components
+    let mix = xi ^ (yi << 16u);
+
+    // scramble
+    let h = hash_u32(mix);
+
+    // normalize to [0,1)
+    return f32(h) * (1.0 / 4294967296.0);
 }
 
 /// Stratified soft‐shadow: returns [0,1] light visibility
