@@ -4,6 +4,7 @@
 let device, context, pipeline, bindGroup, quadBuf, uniformBuf;
 let cameraPos = [0, 0, 5], yaw = 0, pitch = 0, keys = [];
 let scale = [1, 1, 1], rotation = [0, 0, 0], pos = [0, 0, 0];
+let lightPos = [5, -5, -5];
 
 // — Helper: load text over HTTP —
 async function loadText(url) {
@@ -306,7 +307,6 @@ function buildLBVH(mesh, leaf = 1) {
   return { nodes, triOrder };
 }
 
-
 // — Flatten BVH + triangles for SSBOs used by fragment shader —
 function flattenForSSBO(mesh, bvh) {
   const tc = bvh.triOrder.length;
@@ -419,6 +419,7 @@ function invertMat4(m) {
 let lastTime = performance.now(), frameCount = 0;
 function frame(nowMS) {
   const now = nowMS * 0.001;
+  lightPos = [5, 5, 5]
   frameCount++;
   if (performance.now() - lastTime >= 1000) {
     const fps = (frameCount / ((performance.now()-lastTime)/1000)).toFixed(1);
@@ -434,7 +435,7 @@ function frame(nowMS) {
   const rightVec = normalizeVec(cross(fwd, up));
   const trueUp  = cross(rightVec, fwd);
 
-  const fov = Math.PI/4, aspect = innerWidth/innerHeight, fl = 1/Math.tan(fov*0.5);
+  const fov = Math.PI/180*60, aspect = innerWidth/innerHeight, fl = 1/Math.tan(fov*0.5);
   const camRight   = rightVec.map(v=>v*fl*aspect);
   const camUpVec   = trueUp.map(v=>v*fl);
   const camForwVec = fwd.map(v=>v*fl);
@@ -459,7 +460,7 @@ function frame(nowMS) {
 
   const udat = new Float32Array([
     camPos[0], camPos[1], camPos[2], 1,
-    5, -5, -5, 0.5,
+    ...lightPos, 0.0,
     camRight[0], camRight[1], camRight[2], 0,
     camUpVec[0], camUpVec[1], camUpVec[2], 0,
     camForwVec[0], camForwVec[1], camForwVec[2], 0,
@@ -509,8 +510,7 @@ window.addEventListener("DOMContentLoaded", () => {
     // Build LBVH
     const start = performance.now();
     document.getElementById("fpsCounter").textContent = 'Building GPU-based BVH...';
-    const bvh = await buildLBVH(raw, 1);
-    console.log(JSON.stringify(bvh));
+    const bvh = buildLBVH(raw, 1);
     const end = performance.now();
     console.log((end - start) / 1000);
 
