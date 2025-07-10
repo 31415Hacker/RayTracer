@@ -1,104 +1,170 @@
-// ------------------------------
 // shader.wgsl
-// ------------------------------
 
+// — Uniforms —
 struct Uniforms {
-    cameraPos:  vec4<f32>,    // world-space camera pos
-    lightPos:   vec4<f32>,    // world-space light center (w unused)
-    camRight:   vec4<f32>,    // camera basis (world-space)
+    cameraPos:  vec4<f32>,
+    lightPos:   vec4<f32>,
+    camRight:   vec4<f32>,
     camUp:      vec4<f32>,
     camForward: vec4<f32>,
-    model:      mat4x4<f32>,  // world→object transform (inverse), pre-inverted in JS
+    model:      mat4x4<f32>,
 };
 
-@group(0) @binding(0) var<storage,read> triPos0:   array<vec4<f32>>;
-@group(0) @binding(1) var<storage,read> triPos1:   array<vec4<f32>>;
-@group(0) @binding(2) var<storage,read> triNor0:   array<vec4<f32>>;
-@group(0) @binding(3) var<storage,read> triNor1:   array<vec4<f32>>;
-@group(0) @binding(4) var<storage,read> bvhNodes0: array<vec4<f32>>;
-@group(0) @binding(5) var<storage,read> bvhNodes1: array<vec4<f32>>;
+@group(0) @binding(0) var<storage, read> triPos0:   array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> triPos1:   array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> triNor0:   array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read> triNor1:   array<vec4<f32>>;
+@group(0) @binding(4) var<storage, read> bvhNodes0: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read> bvhNodes1: array<vec4<f32>>;
 @group(0) @binding(6) var<uniform>    uniforms:   Uniforms;
 
-// Intermediate types
-struct RayData { ro: vec3<f32>, rd: vec3<f32>, invRd: vec3<f32> };
-struct Hit     { t: f32, n: vec3<f32>        };
-struct VSOut   { @builtin(position) Position: vec4<f32>, @location(0) uv: vec2<f32> };
+// — Quality parameters —
+const SOFT_SAMPLES: u32 = 8u;
+const GI_SAMPLES:   u32 = 32u;
+const GI_BOUNCES:   u32 = 3u;
 
-// Vertex shader: full-screen quad
+// — Poisson‐disk offsets for soft shadows —
+const POISSON_DISK: array<vec2<f32>, 8u> = array<vec2<f32>, 8u>(
+    vec2<f32>(-0.7071,  0.7071),
+    vec2<f32>( 0.7071,  0.7071),
+    vec2<f32>( 0.7071, -0.7071),
+    vec2<f32>(-0.7071, -0.7071),
+    vec2<f32>(-0.3536,  0.9239),
+    vec2<f32>( 0.9239,  0.3536),
+    vec2<f32>( 0.3536, -0.9239),
+    vec2<f32>(-0.9239, -0.3536)
+);
+
+// — Hit record —
+struct Hit {
+    t: f32,
+    n: vec3<f32>,
+};
+
+// — Cached BVH node layout —
+struct CachedNode {
+    bounds_min: vec3<f32>,
+    bounds_max: vec3<f32>,
+    child0:     i32,
+    child1:     i32,
+    is_leaf:    bool,
+    tri_start:  i32,
+    tri_count:  i32,
+};
+
+// — Vertex→fragment data —
+struct VSOut {
+    @builtin(position) Position: vec4<f32>,
+    @location(0)       uv:       vec2<f32>,
+};
+
 @vertex
 fn vs_main(@location(0) pos: vec2<f32>) -> VSOut {
     var o: VSOut;
     o.Position = vec4<f32>(pos, 0.0, 1.0);
-    o.uv = pos * 0.5 + vec2<f32>(0.5);
+    o.uv       = pos * vec2<f32>(0.5, 0.5) + vec2<f32>(0.5, 0.5);
     return o;
 }
 
-// SSBO fetch helpers
+// — Fetch triangle position by index split —
 fn fetchTriPos(idx: u32) -> vec3<f32> {
-    let C = __COUNT_POS0__;
-    if (idx < C) { return triPos0[idx].xyz; }
-    return triPos1[idx - C].xyz;
-}
-fn fetchTriNor(idx: u32) -> vec3<f32> {
-    let C = __COUNT_NOR0__;
-    if (idx < C) { return triNor0[idx].xyz; }
-    return triNor1[idx - C].xyz;
-}
-fn fetchBVHNode(idx: u32) -> vec4<f32> {
-    let C = __COUNT_BVH0__;
-    if (idx < C) { return bvhNodes0[idx]; }
-    return bvhNodes1[idx - C];
+    if (idx < __COUNT_POS0__) {
+        return triPos0[idx].xyz;
+    }
+    return triPos1[idx - __COUNT_POS0__].xyz;
 }
 
-// AABB intersection
-fn intersectAABB(
-    ro: vec3<f32>, invRd: vec3<f32>,
-    mn: vec3<f32>, mx: vec3<f32>,
-    tminOut: ptr<function,f32>, tmaxOut: ptr<function,f32>
-) -> bool {
-    let t0 = (mn - ro) * invRd;
-    let t1 = (mx - ro) * invRd;
+// — Fetch triangle normal by index split —
+fn fetchTriNor(idx: u32) -> vec3<f32> {
+    if (idx < __COUNT_NOR0__) {
+        return triNor0[idx].xyz;
+    }
+    return triNor1[idx - __COUNT_NOR0__].xyz;
+}
+
+// — Fetch raw BVH node vec4 by index split —
+fn fetchBVHNode(idx: u32) -> vec4<f32> {
+    if (idx < __COUNT_BVH0__) {
+        return bvhNodes0[idx];
+    }
+    return bvhNodes1[idx - __COUNT_BVH0__];
+}
+
+// — Decode two vec4s into a CachedNode —
+fn fetchCachedNode(nodeIdx: i32) -> CachedNode {
+    let base = u32(nodeIdx) * 2u;
+    let b0   = fetchBVHNode(base);
+    let b1   = fetchBVHNode(base + 1u);
+    var n: CachedNode;
+    n.bounds_min = b0.xyz;
+    n.bounds_max = b1.xyz;
+    n.is_leaf    = (b1.w < 0.0);
+    if (n.is_leaf) {
+        n.tri_start = i32(b0.w);
+        n.tri_count = -i32(b1.w);
+        n.child0    = -1;
+        n.child1    = -1;
+    } else {
+        n.child0    = i32(b0.w);
+        n.child1    = i32(b1.w);
+        n.tri_start = -1;
+        n.tri_count = 0;
+    }
+    return n;
+}
+
+// — Fast AABB intersection (slab method) —
+fn intersectAABB_fast(
+    ro: vec3<f32>,
+    invRd: vec3<f32>,
+    mn: vec3<f32>,
+    mx: vec3<f32>
+) -> vec2<f32> {
+    let t0    = (mn - ro) * invRd;
+    let t1    = (mx - ro) * invRd;
     let tmin3 = min(t0, t1);
     let tmax3 = max(t0, t1);
     let tmin  = max(max(tmin3.x, tmin3.y), tmin3.z);
     let tmax  = min(min(tmax3.x, tmax3.y), tmax3.z);
-    *tminOut = tmin; *tmaxOut = tmax;
-    return tmax >= max(tmin, 0.0);
+    return vec2<f32>(tmin, tmax);
 }
 
-// Möller–Trumbore triangle intersection
-fn triIntersect(
-    ro: vec3<f32>, rd: vec3<f32>,
-    v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>,
-    tOut: ptr<function,f32>, uOut: ptr<function,f32>, vOut: ptr<function,f32>
-) -> bool {
-    let e1 = v1 - v0;
-    let e2 = v2 - v0;
-    let p  = cross(rd, e2);
-    let a  = dot(e1, p);
-    if (abs(a) < 0.0) { return false; }
-    let invA = 1.0 / a;
-    let s    = ro - v0;
-    let u    = invA * dot(s, p);
-    if (u < 0.0 || u > 1.0) { return false; }
-    let q = cross(s, e1);
-    let v = invA * dot(rd, q);
-    if (v < 0.0 || u + v > 1.0) { return false; }
-    let t = invA * dot(e2, q);
-    if (t > 0.0) {
-        *tOut = t; *uOut = u; *vOut = v;
-        return true;
+// — Fast Möller–Trumbore ray-triangle intersection —
+fn triIntersect_fast(
+    ro: vec3<f32>,
+    rd: vec3<f32>,
+    v0: vec3<f32>,
+    v1: vec3<f32>,
+    v2: vec3<f32>
+) -> vec4<f32> {
+    let e1  = v1 - v0;
+    let e2  = v2 - v0;
+    let p   = cross(rd, e2);
+    let det = dot(e1, p);
+    if (det < 1e-8) {
+        return vec4<f32>(-1.0);
     }
-    return false;
+    let invDet = 1.0 / det;
+    let s      = ro - v0;
+    let u      = dot(s, p) * invDet;
+    if (u < 0.0 || u > 1.0) {
+        return vec4<f32>(-1.0);
+    }
+    let q = cross(s, e1);
+    let v = dot(rd, q) * invDet;
+    if (v < 0.0 || u + v > 1.0) {
+        return vec4<f32>(-1.0);
+    }
+    let t = dot(e2, q) * invDet;
+    if (t <= 1e-6) {
+        return vec4<f32>(-1.0);
+    }
+    return vec4<f32>(t, u, v, 1.0);
 }
 
-fn isSafeVec(v: vec3<f32>) -> bool {
-    return all(abs(v) <= vec3<f32>(1e30));
-}
-
-// Generate world-space ray direction
+// — Generate camera ray direction from screen uv —
 fn generateRay(uv: vec2<f32>) -> vec3<f32> {
-    let scr = uv * 2.0 - vec2<f32>(1.0);
+    let scr = uv * 2.0 - vec2<f32>(1.0, 1.0);
     return normalize(
         uniforms.camRight.xyz   * scr.x +
         uniforms.camUp.xyz      * scr.y +
@@ -106,86 +172,192 @@ fn generateRay(uv: vec2<f32>) -> vec3<f32> {
     );
 }
 
-// World→object transform (use pre-inverted matrix)
-fn toObjectSpace(ro_w: vec3<f32>, rd_w: vec3<f32>) -> RayData {
-    let ro4 = uniforms.model * vec4<f32>(ro_w, 1.0);
-    let R3  = mat3x3<f32>(
-        uniforms.model[0].xyz,
-        uniforms.model[1].xyz,
-        uniforms.model[2].xyz
-    );
-    let rdObj = normalize(R3 * rd_w);
-    return RayData(ro4.xyz, rdObj, 1.0 / rdObj);
+// — RNG helpers for deterministic pseudo‐randoms —
+fn hash_u32(x: u32) -> u32 {
+    var v = x * 747796405u + 2891336453u;
+    v = (v >> ((v >> 28u) + 4u)) ^ v;
+    return v;
+}
+fn rand2(seed: vec2<f32>) -> f32 {
+    let xi = bitcast<u32>(seed.x);
+    let yi = bitcast<u32>(seed.y);
+    return f32(hash_u32(xi ^ (yi << 16u))) * (1.0 / 4294967296.0);
 }
 
-// Stack-based BVH traversal, returns nearest Hit in object space
-fn traverseBVH(ro: vec3<f32>, rd: vec3<f32>, invRd: vec3<f32>) -> Hit {
-    var stack: array<i32,32>;
-    var sp:    i32 = 1;
-    stack[0]   = 0;
-    var bestT  = 1e20;
-    var bestN  = vec3<f32>(0.0);
+// — Importance-sampled hemisphere (cosine-weighted Lambertian) —
+const TWO_PI: f32 = 6.283185307179586;
+fn sampleHemisphere_importance(n: vec3<f32>, seed: vec2<f32>) -> vec3<f32> {
+    let theta = TWO_PI * seed.x;
+    let r     = sqrt(seed.y);
+    let x     = r * cos(theta);
+    let y     = r * sin(theta);
+    let z     = sqrt(max(0.0, 1.0 - seed.y));
+
+    // Build tangent frame
+    let up = select(vec3<f32>(1.0, 0.0, 0.0),
+                    vec3<f32>(0.0, 1.0, 0.0),
+                    abs(n.y) < 0.999);
+    let T  = normalize(cross(up, n));
+    let B  = cross(n, T);
+
+    return normalize(T * x + B * y + n * z);
+}
+
+// — Shadow‐ray test with early out —
+fn shadowRay(ro: vec3<f32>, rd: vec3<f32>, maxDist: f32) -> bool {
+    let invRd = 1.0 / rd;
+    var cur: i32 = 0;
+    loop {
+        if (cur < 0) {
+            break;
+        }
+        let node = fetchCachedNode(cur);
+        let hb   = intersectAABB_fast(ro, invRd, node.bounds_min, node.bounds_max);
+        if (hb.y >= max(hb.x, 0.0) && hb.x <= maxDist) {
+            if (node.is_leaf) {
+                for (var j: i32 = 0; j < node.tri_count; j = j + 1) {
+                    let ti = u32(node.tri_start + j);
+                    let va = fetchTriPos(ti * 3u + 0u);
+                    let vb = fetchTriPos(ti * 3u + 1u);
+                    let vc = fetchTriPos(ti * 3u + 2u);
+                    let h  = triIntersect_fast(ro, rd, va, vb, vc);
+                    if (h.w > 0.0 && h.x < maxDist) {
+                        return true;
+                    }
+                }
+                break;
+            } else {
+                cur = node.child0;
+            }
+        } else {
+            break;
+        }
+    }
+    return false;
+}
+
+// — Direct lighting with soft shadows —
+fn computeDirectRadiance_OS_fast(
+    hit_os:   vec3<f32>,
+    n_os:     vec3<f32>,
+    light_os: vec3<f32>
+) -> f32 {
+    let L    = normalize(light_os - hit_os);
+    let diff = max(dot(n_os, L), 0.0);
+
+    if (diff <= 0.0) {
+        return 0.0;
+    }
+    let radius: f32 = uniforms.lightPos.w;
+    var occluded: u32 = 0u;
+
+    let perp1 = normalize(cross(n_os, L));
+    let perp2 = cross(L, perp1);
+
+    for (var i: u32 = 0u; i < SOFT_SAMPLES; i = i + 1u) {
+        let off       = POISSON_DISK[i] * radius;
+        let samplePos = light_os + off.x * perp1 + off.y * perp2;
+        let ro2       = hit_os + n_os * 0.001;
+        let rd2       = normalize(samplePos - hit_os);
+        let sd        = length(samplePos - hit_os);
+        if (shadowRay(ro2, rd2, sd - 0.001)) {
+            occluded = occluded + 1u;
+        }
+    }
+
+    let shadowFactor = 1.0 - f32(occluded) / f32(SOFT_SAMPLES);
+    return diff * shadowFactor;
+}
+
+// — BVH traversal with fixed‐size stack —
+const MAX_STACK: i32 = 16;
+fn traverseBVH_optimized(
+    ro: vec3<f32>,
+    rd: vec3<f32>,
+    invRd: vec3<f32>,
+    maxDist: f32
+) -> Hit {
+    var stack: array<i32, MAX_STACK>;
+    var sp:    i32 = 0;
+    var cur:   i32 = 0;
+    var bestT: f32 = maxDist;
+    var bestN: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
 
     loop {
-        if (sp == 0) { break; }
-        sp -= 1;
-        let ni = stack[sp];
-        let i0 = u32(ni * 2);
-        let b0 = fetchBVHNode(i0);
-        let b1 = fetchBVHNode(i0 + 1u);
-        let mn = b0.xyz;
-        let mx = b1.xyz;
-
-        var tmin: f32; var tmax: f32;
-        if (!intersectAABB(ro, invRd, mn, mx, &tmin, &tmax) || tmin > bestT) {
-            continue;
+        if (cur < 0 || sp >= MAX_STACK) {
+            break;
         }
-
-        let rightFlag = b1.w;
-        if (rightFlag < 0.0) {
-            // leaf
-            let start = i32(b0.w);
-            let cnt   = -i32(rightFlag);
-            for (var j = 0; j < cnt; j = j + 1) {
-                let ti = u32(start + j);
-                let v0 = fetchTriPos(ti*3u + 0u);
-                let v1 = fetchTriPos(ti*3u + 1u);
-                let v2 = fetchTriPos(ti*3u + 2u);
-                let geoN = cross(v1 - v0, v2 - v0);
-                if (dot(geoN, rd) > 0.0) { continue; }
-                var t: f32; var u: f32; var v: f32;
-                if (triIntersect(ro, rd, v0, v1, v2, &t, &u, &v) && t < bestT) {
-                    bestT = t;
-                    let n0 = fetchTriNor(ti*3u + 0u);
-                    let n1 = fetchTriNor(ti*3u + 1u);
-                    let n2 = fetchTriNor(ti*3u + 2u);
-                    bestN = normalize(n0*(1.0-u-v) + n1*u + n2*v);
+        let node = fetchCachedNode(cur);
+        let hb   = intersectAABB_fast(ro, invRd, node.bounds_min, node.bounds_max);
+        if (hb.y >= max(hb.x, 0.0) && hb.x <= bestT) {
+            if (node.is_leaf) {
+                // Test triangles in leaf
+                for (var j: i32 = 0; j < node.tri_count; j = j + 1) {
+                    let ti = u32(node.tri_start + j);
+                    let va = fetchTriPos(ti * 3u + 0u);
+                    let vb = fetchTriPos(ti * 3u + 1u);
+                    let vc = fetchTriPos(ti * 3u + 2u);
+                    if (dot(cross(vb - va, vc - va), rd) > 0.0) {
+                        continue;
+                    }
+                    let h = triIntersect_fast(ro, rd, va, vb, vc);
+                    if (h.w > 0.0 && h.x < bestT) {
+                        bestT = h.x;
+                        let n0 = fetchTriNor(ti * 3u + 0u);
+                        let n1 = fetchTriNor(ti * 3u + 1u);
+                        let n2 = fetchTriNor(ti * 3u + 2u);
+                        bestN = normalize(n0 * (1.0 - h.y - h.z) + n1 * h.y + n2 * h.z);
+                    }
+                }
+                if (sp > 0) {
+                    sp = sp - 1;
+                    cur = stack[sp];
+                } else {
+                    break;
+                }
+            } else {
+                // Internal node: test children
+                let c0idx = node.child0;
+                let c1idx = node.child1;
+                let c0n   = fetchCachedNode(c0idx);
+                let c1n   = fetchCachedNode(c1idx);
+                let c0b   = intersectAABB_fast(ro, invRd, c0n.bounds_min, c0n.bounds_max);
+                let c1b   = intersectAABB_fast(ro, invRd, c1n.bounds_min, c1n.bounds_max);
+                let hit0  = c0b.y >= max(c0b.x, 0.0) && c0b.x <= bestT;
+                let hit1  = c1b.y >= max(c1b.x, 0.0) && c1b.x <= bestT;
+                if (hit0 && hit1) {
+                    if (c0b.x <= c1b.x) {
+                        if (sp < MAX_STACK - 1) {
+                            stack[sp] = c1idx;
+                            sp = sp + 1;
+                        }
+                        cur = c0idx;
+                    } else {
+                        if (sp < MAX_STACK - 1) {
+                            stack[sp] = c0idx;
+                            sp = sp + 1;
+                        }
+                        cur = c1idx;
+                    }
+                } else if (hit0) {
+                    cur = c0idx;
+                } else if (hit1) {
+                    cur = c1idx;
+                } else {
+                    if (sp > 0) {
+                        sp = sp - 1;
+                        cur = stack[sp];
+                    } else {
+                        break;
+                    }
                 }
             }
         } else {
-            // internal: push children
-            let c0 = i32(b0.w);
-            let c1 = i32(rightFlag);
-            var t0min: f32; var t0max: f32;
-            var t1min: f32; var t1max: f32;
-            let mn0 = fetchBVHNode(u32(c0*2)).xyz;
-            let mx0 = fetchBVHNode(u32(c0*2)+1u).xyz;
-            let mn1 = fetchBVHNode(u32(c1*2)).xyz;
-            let mx1 = fetchBVHNode(u32(c1*2)+1u).xyz;
-            let hit0 = intersectAABB(ro, invRd, mn0, mx0, &t0min, &t0max) && t0min <= bestT;
-            let hit1 = intersectAABB(ro, invRd, mn1, mx1, &t1min, &t1max) && t1min <= bestT;
-            if (hit0 && hit1) {
-                if (t0min <= t1min) {
-                    if (sp < 32) { stack[sp] = c1; sp += 1; }
-                    if (sp < 32) { stack[sp] = c0; sp += 1; }
-                } else {
-                    if (sp < 32) { stack[sp] = c0; sp += 1; }
-                    if (sp < 32) { stack[sp] = c1; sp += 1; }
-                }
-            } else if (hit0) {
-                if (sp < 32) { stack[sp] = c0; sp += 1; }
-            } else if (hit1) {
-                if (sp < 32) { stack[sp] = c1; sp += 1; }
+            if (sp > 0) {
+                sp = sp - 1;
+                cur = stack[sp];
+            } else {
+                break;
             }
         }
     }
@@ -193,91 +365,76 @@ fn traverseBVH(ro: vec3<f32>, rd: vec3<f32>, invRd: vec3<f32>) -> Hit {
     return Hit(bestT, bestN);
 }
 
-// constant for sampling
-const PI = 3.141592653589793;
-const SOFT_SAMPLES = 4;
+// — Main lighting function with importance-sampled GI —
+fn computeLighting_optimized(
+    ro_w: vec3<f32>,
+    rd_w: vec3<f32>,
+    uv:   vec2<f32>
+) -> vec4<f32> {
+    // Transform to object space
+    let ro4_os   = uniforms.model * vec4<f32>(ro_w, 1.0);
+    var ro_os    = ro4_os.xyz;
+    let R3       = mat3x3<f32>(
+        uniforms.model[0].xyz,
+        uniforms.model[1].xyz,
+        uniforms.model[2].xyz
+    );
+    var rd_os    = normalize(R3 * rd_w);
+    let invRd_os = 1.0 / rd_os;
+    let light4   = uniforms.model * uniforms.lightPos;
+    let light_os = light4.xyz;
 
-// simple 2D hash → [0,1)
-fn rand2(seed: vec2<f32>) -> f32 {
-    return fract(sin(dot(seed, vec2<f32>(12.9898,78.233))) * 43758.5453);
-}
+    // Primary ray
+    let hit0 = traverseBVH_optimized(ro_os, rd_os, invRd_os, 1e20);
+    if (hit0.t >= 1e19) {
+        // Miss → sky color
+        return vec4<f32>(0.6, 0.8, 1.0, 1.0);
+    }
 
-/// Stratified soft‐shadow: returns [0,1] light visibility
-fn computeSoftShadow(hit_ws: vec3<f32>, n_ws: vec3<f32>) -> f32 {
-    // build an orthonormal basis (T,B) around the true light direction
-    let L = normalize(uniforms.lightPos.xyz - hit_ws);
-    var up = vec3<f32>(0.0, 1.0, 0.0);
-    if (abs(L.y) > 0.99) { up = vec3<f32>(1.0, 0.0, 0.0); }
-    let T = normalize(cross(up, L));
-    let B = cross(L, T);
+    // Hit point and normal
+    let hit_pos = ro_os + hit0.t * rd_os;
+    var n_os    = hit0.n;
+    let albedo  = vec3<f32>(1.0, 0.84, 0.0);
 
-    var occ: f32 = 0.0;
-    for (var i: i32 = 0; i < SOFT_SAMPLES; i = i + 1) {
-        let fi = f32(i);
-        // stratified seeds
-        let seed = hit_ws.xy * (fi + 1.37) + hit_ws.yz * (fi + 2.49);
-        let a = 2.0 * PI * rand2(seed);
-        let r = sqrt(rand2(seed.yx));
-        // sample point on disc
-        let offset = (T * cos(a) + B * sin(a)) * (r * uniforms.lightPos.w);
-        let samplePos = uniforms.lightPos.xyz + offset;
+    // Direct lighting
+    let directScalar = computeDirectRadiance_OS_fast(hit_pos, n_os, light_os);
+    var Lo = albedo * directScalar;
 
-        // trace toward that point
-        let dir_ws    = normalize(samplePos - hit_ws);
-        let origin_ws = hit_ws + n_ws * 0.001;
-        let rdObj     = toObjectSpace(origin_ws, dir_ws);
-        let sh        = traverseBVH(rdObj.ro, rdObj.rd, rdObj.invRd);
-
-        // if something blocks before reaching sample
-        if (sh.t < length(samplePos - hit_ws)) {
-            occ = occ + 1.0;
+    // Indirect GI
+    var indirect: vec3<f32> = vec3<f32>(0.0);
+    for (var i: u32 = 0u; i < GI_SAMPLES; i = i + 1u) {
+        var throughput = albedo;
+        var ro_bounce  = hit_pos + n_os * 0.001;
+        var n_bounce   = n_os;
+        for (var bounce: u32 = 0u; bounce < GI_BOUNCES; bounce = bounce + 1u) {
+            let rx  = rand2(vec2<f32>(f32(i), f32(bounce) + 17.0));
+            let ry  = rand2(vec2<f32>(f32(i) + 37.0, f32(bounce)));
+            let dir = sampleHemisphere_importance(n_bounce, vec2<f32>(rx, ry));
+            let invD = 1.0 / dir;
+            let hit1 = traverseBVH_optimized(ro_bounce, dir, invD, 50.0);
+            if (hit1.t >= 50.0) {
+                break;
+            }
+            let p1  = ro_bounce + hit1.t * dir;
+            let nn1 = hit1.n;
+            let dS  = computeDirectRadiance_OS_fast(p1, nn1, light_os);
+            indirect = indirect + throughput * dS;
+            throughput = throughput * albedo;
+            ro_bounce  = p1 + nn1 * 0.001;
+            n_bounce   = nn1;
         }
     }
-    // visibility = 1 - occlusion_fraction
-    return 1.0 - occ / f32(SOFT_SAMPLES);
-}
+    indirect = indirect / f32(GI_SAMPLES);
 
-/// Lambert diffuse + soft shadows
-fn computeLighting(ro: vec3<f32>, rd: vec3<f32>, hit: Hit) -> vec4<f32> {
-    if (hit.t < 1e19) {
-        // object-space → world-space hit & normal
-        let R3     = mat3x3<f32>(
-            uniforms.model[0].xyz,
-            uniforms.model[1].xyz,
-            uniforms.model[2].xyz
-        );
-        let RT     = transpose(R3);               // original model
-        let hit_os = ro + hit.t * rd;
-        let hit_ws = RT * hit_os;                 // world-space point
-        var Nws    = normalize(RT * hit.n);       // world-space normal
-        if (!isSafeVec(Nws)) {
-            Nws = vec3<f32>(0.0,1.0,0.0);
-        }
-
-        // Lambert term
-        let L    = normalize(uniforms.lightPos.xyz - hit_ws);
-        let diff = max(dot(Nws, L), 0.0);
-
-        // soft‐shadow factor
-        let vis  = computeSoftShadow(hit_ws, Nws);
-
-        let c = diff * vis;
-        return vec4<f32>(c, c, c, 1.0);
-    }
-    // sky
-    return vec4<f32>(0.6, 0.8, 1.0, 1.0);
-}
-
-// Raytrace entry
-fn raytrace(uv: vec2<f32>) -> vec4<f32> {
-    let ro_w = uniforms.cameraPos.xyz;
-    let rd_w = generateRay(uv);
-    let rdObj= toObjectSpace(ro_w, rd_w);
-    let hit  = traverseBVH(rdObj.ro, rdObj.rd, rdObj.invRd);
-    return computeLighting(rdObj.ro, rdObj.rd, hit);
+    // Combine & gamma
+    let color = Lo + indirect;
+    let gamma = vec3<f32>(1.0 / 2.2);
+    return vec4<f32>(pow(color, gamma), 1.0);
 }
 
 @fragment
 fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
-    return raytrace(in.uv);
+    let ro: vec3<f32> = uniforms.cameraPos.xyz;
+    let rd: vec3<f32> = generateRay(in.uv);
+    return computeLighting_optimized(ro, rd, in.uv);
 }

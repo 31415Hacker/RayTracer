@@ -1,7 +1,5 @@
 {
-<<<<<<< HEAD
-    "liveServer.settings.port": 5504
-=======
+    "liveServer.settings.port": 3000,
     "files.associations": {
         "stb_easy_font.h": "c",
         "array": "cpp",
@@ -55,5 +53,4 @@
         "cinttypes": "cpp",
         "typeinfo": "cpp"
     }
->>>>>>> d5a2be9 (soft shadows and adjustable full model matrix)
 }
