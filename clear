@@ -1,0 +1,251 @@
+[33mcommit 7b3808d7c9f9e60bda99ff26e59ffd06e68784d9[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m)[m
+Author: aryanshandanu18 <ilmaniariq@gmail.com>
+Date:   Fri Jul 11 08:37:25 2025 +0700
+
+    update
+
+[33mcommit 257aae58101c6f42fe02ad68e6b0d73e9e6470f3[m
+Author: aryanshandanu18 <ilmaniariq@gmail.com>
+Date:   Thu Jul 10 14:12:54 2025 +0700
+
+    update path tracer with extra bounces and optimizations
+
+[33mcommit 37ac805934297dea5c979bae4ec32c07c5af660b[m
+Author: aryanshandanu18 <ilmaniariq@gmail.com>
+Date:   Sat Jun 21 20:22:35 2025 +0700
+
+    GPU BVH building
+
+[33mcommit 0eebd4eea17fb4f406a880fe022970d96d93bc98[m
+Author: aryanshandanu18 <ilmaniariq@gmail.com>
+Date:   Sat Jun 21 09:01:26 2025 +0700
+
+    chore: untrack stb directory and ignore it
+
+[33mcommit d8aa384fc9fce49ad1365cb2e75f9438520b6820[m
+Author: aryanshandanu18 <ilmaniariq@gmail.com>
+Date:   Sat Jun 21 08:48:53 2025 +0700
+
+    soft shadows and adjustable full model matrix
+
+[33mcommit c42c10884a44921219099f83b4fee329c7248f71[m[33m ([m[1;31morigin/main[m[33m)[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 26 07:58:24 2025 +0400
+
+    Update shader.wgsl
+
+[33mcommit c0acc0e1347f50e6dd61cc1aecf4baa115d8e035[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 26 07:54:10 2025 +0400
+
+    Update shader.wgsl
+
+[33mcommit 8d448869cd06390345cbdb5617481fd7be5446da[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 26 07:51:22 2025 +0400
+
+    Optimize shader.wgsl
+
+[33mcommit 182b12c1bf40a4a43508201784caf008de2cf35b[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 26 07:48:34 2025 +0400
+
+    Update shader.wgsl
+
+[33mcommit 89a56e02238b4cb2e54caad42729b9add55574b7[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 26 07:47:55 2025 +0400
+
+    Update shader.wgsl
+
+[33mcommit cdb6efc8173e9bcb212624a2bb6dbaba151499bf[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 26 07:47:37 2025 +0400
+
+    Update shader.wgsl
+
+[33mcommit e18dfe08eea1b0686b961657aecadad9a75be6f9[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 26 07:47:08 2025 +0400
+
+    20 BIN SAH BVH
+
+[33mcommit f08b5868cecc0da814bba47cbfa34bc4927f888b[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 26 07:44:58 2025 +0400
+
+    Update script.js
+
+[33mcommit 79c2fc5b3d1318863d43270fb142817fcd411341[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 26 07:36:08 2025 +0400
+
+    Update script.js
+
+[33mcommit 070d5371228bf2433538b7437ed0045b57b88fc1[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 26 07:35:35 2025 +0400
+
+    Update shader.wgsl
+
+[33mcommit 918768813ba340dd7d3c316ec9653dd12bc919a7[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 26 06:24:57 2025 +0400
+
+    Update index.html
+
+[33mcommit f3c2f6a957e3fdcf1f3c42c84dfafbd49bb29bdc[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 26 06:15:24 2025 +0400
+
+    Update script.js
+
+[33mcommit 5d430e1ae982d542e78ae46fb3ab9edd8cde34aa[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 26 06:14:06 2025 +0400
+
+    Update shader.wgsl
+
+[33mcommit aac5b0830df52f514b1e8b9aed091a65dbf4aabe[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Sun Jun 22 10:33:18 2025 +0400
+
+    Update shader.wgsl
+
+[33mcommit 06bd23b3a34f5a494a0873a352133d926bde5bea[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Sun Jun 22 10:32:45 2025 +0400
+
+    Update script.js
+
+[33mcommit 38681c0a4faf2e0ad3bda580b601fd697f8b07a3[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Sat Jun 21 18:40:36 2025 +0400
+
+    Create morton_compute.wgsl
+
+[33mcommit fb6f63c59f7a79b340b58356e96d3941ea9cc6a4[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Sat Jun 21 18:39:37 2025 +0400
+
+    Update script.js
+
+[33mcommit a86a252b80e004e91c5ca694312a8f1dd3569e00[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Sat Jun 21 06:22:02 2025 +0400
+
+    Update style.css
+
+[33mcommit e7842e0ad49690ef2509fdad2e47b4743fd6dbb1[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Sat Jun 21 06:21:34 2025 +0400
+
+    Update shader.wgsl
+
+[33mcommit 5efb5365f7dc89fa38dfc6d99f32617fb2a2ce2a[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Sat Jun 21 06:20:19 2025 +0400
+
+    Update index.html
+
+[33mcommit 09fbf40a7f364f2f15881698a27c4faea7d5b964[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Sat Jun 21 06:19:10 2025 +0400
+
+    Update shader.wgsl
+
+[33mcommit 3b30b7174cdbd129c5aadc2136276a20cf1ac82d[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Sat Jun 21 06:18:11 2025 +0400
+
+    Update script.js
+
+[33mcommit f9e79cc832762f29939857f248871e9d7a94fee6[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 19 02:23:38 2025 +0000
+
+    original BVH raytracer
+
+[33mcommit 6ee6c355b18e9e887131caa56c017903689b723c[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Mon Jun 16 13:20:37 2025 +0000
+
+    update
+
+[33mcommit bf90efc25bfef542c941dc934f2afd2ce4b9840f[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Mon Jun 16 12:34:26 2025 +0000
+
+    update
+
+[33mcommit 52c8c87493ed30e3393c4301f8fd00a66346ad85[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Mon Jun 16 12:02:22 2025 +0000
+
+    revert changes
+
+[33mcommit 6b573895ce64118a1b340a2c72ff03e95f3bbfc7[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Fri Jun 13 16:23:35 2025 +0000
+
+    update logic
+
+[33mcommit 3819c64b39f2d208a3c5efa5794a3521795b3207[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Fri Jun 13 13:20:12 2025 +0000
+
+    update
+
+[33mcommit 123a4f5da7027e5a61902f3944dfc215ee70b542[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Fri Jun 13 09:42:38 2025 +0000
+
+    update shaders
+
+[33mcommit 35327c92c1f9f59555c1266ad67de68e0dfec658[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 12 16:20:22 2025 +0000
+
+    update
+
+[33mcommit 23474c75848c55b721a2dc2c3993e9fde0a905dc[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 12 14:36:51 2025 +0000
+
+    Update script.js
+
+[33mcommit 336162848b51d086e68a1eb6157e227908e8bdf9[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 12 11:42:24 2025 +0000
+
+    update html
+
+[33mcommit 878417391f48910e15496eab76e9e888f26ba27d[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Wed Jun 11 13:04:34 2025 +0000
+
+    Your commit message here
+
+[33mcommit 5016dd86110e5c1eefd4f306a06c1ff82e2731fe[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Wed Jun 11 16:43:10 2025 +0400
+
+    Delete CNAME
+
+[33mcommit 07323fca330ba4a663c33a7a0bb0dd15eeba9726[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Wed Jun 11 16:42:14 2025 +0400
+
+    Create CNAME
+
+[33mcommit 593502be8a5e8ff11127c5ef158149efa0376373[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Wed Jun 11 11:42:35 2025 +0000
+
+    Initial site
+
+[33mcommit 154c856fef9a86990b5e70706298eee8ae17086e[m
+Author: 31415Hacker <ilmaniariq@gmail.com>
+Date:   Thu Jun 5 14:39:25 2025 +0400
+
+    Initial commit
